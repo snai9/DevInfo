@@ -37,7 +37,7 @@ var dbPath = io.appData("hwinfo/hwinfo.db");
 var db = hwserver.db.init(dbPath);
 if(db) db.close();
 
-var colScaleWidths = {40;60;70;100;90;100;120;130;160;100;120;90;100;90;130;230;70};
+var colScaleWidths = {40;60;70;100;90;100;120;130;160;100;120;90;100;90;150;230;70};
 var colNames = {"ID";"使用人";"单位";"部门及位置";"计算机编号";"计算机名";"IP地址";"MAC地址";"操作系统";"计算机品牌";"办公软件";"办公软件日期";"杀毒软件";"杀毒软件日期";"内存";"硬盘";"上传时间"};
 var dbColNames = {"id";"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"officeDate";"antivirus";"avDate";"memories";"disks";"uploadTime"};
 
@@ -65,7 +65,7 @@ winform.vlist.color1 = 0x888888;
 winform.vlist.bkColor1 = 0xF5F5F5;
 winform.vlist.selectedBkColor = 0xE0F0FF;
 winform.vlist.setHeaderHeight(36);
-winform.vlist.setRowHeight(60);
+winform.vlist.setRowHeight(66);
 winform.vlist.font = ::LOGFONT(name="Microsoft YaHei";h=-12;color=0x333333);
 winform.vlist.headerFont = ::LOGFONT(name="Microsoft YaHei";h=-12;color=0x0B86B8;bold=true);
 
