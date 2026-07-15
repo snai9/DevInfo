@@ -1,0 +1,50 @@
+import sqlite;
+import io;
+
+namespace hwserver.db;
+
+init = function(dbPath){
+	if(!dbPath) dbPath = ..io.appData("hwinfo/hwinfo.db");
+	var dir = ..io.appData("hwinfo/");
+	..io.createDir(dir);
+	
+	var db = ..sqlite(dbPath);
+	if(!db) return null;
+	
+	db.exec("CREATE TABLE IF NOT EXISTS hwinfo ("
+		++ "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+		++ "used TEXT NOT NULL,"
+		++ "unit TEXT NOT NULL DEFAULT '',"
+		++ "dept TEXT NOT NULL DEFAULT '',"
+		++ "pcId TEXT DEFAULT '',"
+		++ "hostname TEXT NOT NULL,"
+		++ "ips TEXT NOT NULL DEFAULT '',"
+		++ "macs TEXT NOT NULL DEFAULT '',"
+		++ "osver TEXT NOT NULL DEFAULT '',"
+		++ "pcBrand TEXT DEFAULT '',"
+		++ "office TEXT DEFAULT '',"
+		++ "officeDate TEXT DEFAULT '',"
+		++ "antivirus TEXT DEFAULT '',"
+		++ "avDate TEXT DEFAULT '',"
+		++ "memories TEXT NOT NULL DEFAULT '',"
+		++ "disks TEXT NOT NULL DEFAULT '',"
+		++ "uploadTime TEXT NOT NULL"
+		++ ");");
+	
+	var cols = db.getTable("PRAGMA table_info(hwinfo)");
+	var existing = {};
+	if(cols) {
+		for i = 1; #cols {
+			existing[cols[i][["name"]]] = true;
+		}
+	}
+	
+	var newCols = {"unit";"dept";"pcId";"pcBrand";"officeDate";"avDate"};
+	for i = 1; #newCols {
+		if(!existing[newCols[i]]) {
+			db.exec("ALTER TABLE hwinfo ADD COLUMN " ++ newCols[i] ++ " TEXT DEFAULT ''");
+		}
+	}
+	
+	return db;
+}

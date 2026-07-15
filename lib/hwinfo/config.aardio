@@ -1,0 +1,38 @@
+import io;
+import JSON;
+
+namespace hwinfo.config;
+
+defaultUrls = {"http://10.44.179.88:8080";"http://10.130.175.88:8080";"http://127.0.0.1:8080"};
+
+load = function(){
+	var path = ..io.appData("hwinfo/config.json");
+	var cfg;
+	try {
+		cfg = ..JSON.load(path);
+	}
+	catch(e) {
+		cfg = null;
+	}
+	if(!cfg) return {used=""; unit=""; dept=""; serverUrls=defaultUrls; activeUrl=""};
+	if(!cfg.used) cfg.used = "";
+	if(!cfg.unit) cfg.unit = "";
+	if(!cfg.dept) cfg.dept = "";
+	if(!cfg.serverUrls || #cfg.serverUrls == 0) {
+		if(cfg[["serverUrl"]] && cfg[["serverUrl"]] != "") {
+			cfg.serverUrls = {cfg[["serverUrl"]]};
+		}
+		else {
+			cfg.serverUrls = defaultUrls;
+		}
+	}
+	if(!cfg.activeUrl) cfg.activeUrl = cfg.serverUrls[1] || "";
+	return cfg;
+}
+
+save = function(cfg){
+	var dir = ..io.appData("hwinfo/");
+	..io.createDir(dir);
+	var path = ..io.appData("hwinfo/config.json");
+	..JSON.save(path, cfg);
+}

@@ -1,0 +1,535 @@
+import com.wmi;
+import sys.installed;
+
+namespace hwinfo.collect;
+
+hostname = function(){
+	import com.wmi;
+	var name = ..com.wmi.get("Win32_ComputerSystem", "Name");
+	return name || "未获取";
+}
+
+network = function(){
+	import com.wmi;
+	var ips = {};
+	var macs = {};
+	for props, i in ..com.wmi.eachProperties("Win32_NetworkAdapterConfiguration") {
+		if(props[["IPEnabled"]]) {
+			var ipList = props[["IPAddress"]];
+			if(..type(ipList) == "table") {
+				for j = 1; #ipList {
+					var ip = ipList[j];
+					if(ip && ..string.match(ip, "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") && ip != "0.0.0.0") {
+						..table.push(ips, ip);
+					}
+				}
+			}
+			elseif(..type(ipList) == "string" && ..string.match(ipList, "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") && ipList != "0.0.0.0") {
+				..table.push(ips, ipList);
+			}
+			var mac = props[["MACAddress"]];
+			if(mac && mac != "") {
+				var hex = "";
+				for m in ..string.gmatch(mac, "[0-9A-Fa-f]+") {
+					hex = hex ++ m;
+				}
+				if(#hex >= 12) {
+					mac = ..string.upper(..string.slice(hex,1,2) ++ ":" ++ ..string.slice(hex,3,4) ++ ":" ++ ..string.slice(hex,5,6) ++ ":" ++ ..string.slice(hex,7,8) ++ ":" ++ ..string.slice(hex,9,10) ++ ":" ++ ..string.slice(hex,11,12));
+				}
+				..table.push(macs, mac);
+			}
+		}
+	}
+	return {
+		ips = #ips > 0 ? ips : {"未获取"};
+		macs = #macs > 0 ? macs : {"未获取"};
+	};
+}
+
+osver = function(){
+	import com.wmi;
+	var props = ..com.wmi.getProperties("Win32_OperatingSystem");
+	if(!props) return "未获取";
+	return props[["Caption"]] || "未获取";
+}
+
+pcId = function(){
+	import com.wmi;
+	var sn = ..com.wmi.get("Win32_BIOS", "SerialNumber");
+	if(sn) {
+		var clean = ..string.match(sn, "^([a-zA-Z0-9%-]+)");
+		if(clean && #clean >= 3) return clean;
+	}
+	sn = ..com.wmi.get("Win32_BaseBoard", "SerialNumber");
+	if(sn) {
+		var clean = ..string.match(sn, "^([a-zA-Z0-9%-]+)");
+		if(clean && #clean >= 3) return clean;
+	}
+	return "未获取";
+}
+
+brand = function(){
+	import com.wmi;
+	var props = ..com.wmi.getProperties("Win32_ComputerSystem");
+	if(!props) return "未获取";
+	var mfr = ..string.trim(props[["Manufacturer"]] || "");
+	var model = ..string.trim(props[["Model"]] || "");
+	if(mfr == "" && model == "") return "未获取";
+	if(mfr == "") return model;
+	if(model == "") return mfr;
+	return mfr ++ " " ++ model;
+}
+
+software = function(){
+	import win.reg;
+	import fsys.time;
+	import fsys;
+
+	// 第一步：从 Uninstall 注册表直接枚举（权威源）
+	// 按 DisplayName 去重：同名程序保留最早的 InstallDate（升级会在不同路径产生新条目，
+	// 但原始安装日期的条目通常保留在最早的路径中）
+	var readAllUninstall = function(){
+		var all = {};
+		var paths = {
+			"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+			"HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+			"HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
+		};
+		for p = 1; #paths {
+			var reg = ..win.regReaderWow64(paths[p]);
+			if(!reg) continue;
+			for k, writeTime in reg.eachKey() {
+				var r = reg.open(k, true);
+				if(!r) continue;
+				var name = r.queryValue("DisplayName");
+				if(!name) { r.close(); continue; }
+				var sysComp = r.queryValue("SystemComponent");
+				var parentKey = r.queryValue("ParentKeyName");
+				var publisher = r.queryValue("Publisher") || "";
+				var installDate = r.queryValue("InstallDate") || "";
+				var installLocation = r.queryValue("InstallLocation") || "";
+				r.close();
+
+				name = ..string.trim(name);
+
+				if(all[name]) {
+					// 保留更早的 InstallDate（字符串比较 YYYYMMDD 就是时间顺序）
+					if(installDate != "" && (all[name].installDate == "" || installDate < all[name].installDate)) {
+						all[name].installDate = installDate;
+					}
+					// 保留非空的 InstallLocation
+					if(installLocation != "" && all[name].installLocation == "") {
+						all[name].installLocation = installLocation;
+					}
+				} else {
+					all[name] = {
+						id = k;
+						name = name;
+						publisher = ..string.trim(publisher);
+						systemComponent = (sysComp == 1);
+						parentKey = parentKey;
+						installDate = installDate;
+						installLocation = installLocation;
+						keyWriteTime = writeTime;
+					};
+				}
+			}
+			reg.close();
+		}
+		return all;
+	};
+
+	var programs = readAllUninstall();
+
+	// 第二步：精准识别办公软件（DisplayName 主名匹配 + Publisher 辅助）
+	// 办公软件真实主程序特征：DisplayName 是产品主名（不含子组件关键词）
+	var officeNameBlacklist = {
+		["Office 16 Click-to-Run Extensibility Component"] = true;
+		["Office 16 Click-to-Run Localization Component"] = true;
+		["Office 16 Click-to-Run Updating Component"] = true;
+		["Office 16 Click-to-Run Performance Plugin"] = true;
+		["Microsoft Office 16.0 Object Library"] = true;
+		["Microsoft Office File Validation Add-In"] = true;
+		["Microsoft Office 2013 组件"] = true;
+		["Microsoft Office MUI"] = true;
+		["Microsoft Office 语言包"] = true;
+		["Office Software Protection Platform"] = true;
+		["Microsoft 365 语言包"] = true;
+	}
+	// 通用子组件特征：包含这些词的几乎都是子组件
+	var componentKeywords = {"Click-to-Run"; "Extensibility"; "Localization"; "MUI"; "语言包"; "Object Library"; "File Validation"; "Performance Plugin"; "Service Pack"};
+
+	// 严格匹配：必须 DisplayName 命中下列产品主名
+	var matchOfficeProduct = function(name){
+		var lower = ..string.lower(name);
+		// Microsoft 365 / Office 主程序（以这些开头）
+		if( ..string.find(lower, "microsoft 365") == 1 ) return true;
+		if( ..string.find(lower, "microsoft office") == 1 ) return true;
+		if( lower == "microsoft office 专业版" || lower == "microsoft office 标准版" ) return true;
+		// WPS
+		if( ..string.find(lower, "wps office") == 1 || lower == "wps" ) return true;
+		// LibreOffice
+		if( ..string.find(lower, "libreoffice") == 1 ) return true;
+		return false;
+	};
+
+	// 第三步：精准识别杀毒软件
+	// 思路：DisplayName 必须是已知的杀软主程序名
+	// 不能用 Publisher 白名单，因为 Microsoft / Tencent 等公司有很多非杀软产品
+	var avProductNames = {
+		["Windows Defender"] = true;
+		["Microsoft Defender Antivirus"] = true;
+		["Microsoft Security Essentials"] = true;
+		["360 安全卫士"] = true;
+		["360 杀毒"] = true;
+		["360Safe"] = true;
+		["360 Total Security"] = true;
+		["腾讯电脑管家"] = true;
+		["电脑管家"] = true;
+		["QQ电脑管家"] = true;
+		["火绒安全软件"] = true;
+		["火绒"] = true;
+		["Huorong"] = true;
+		["奇安信天擎"] = true;
+		["天擎"] = true;
+		["奇安信"] = true;
+		["深信服 EDR"] = true;
+		["深信服"] = true;
+		["Sangfor Endpoint Secure"] = true;
+		["瑞星杀毒软件"] = true;
+		["瑞星"] = true;
+		["Rising Antivirus"] = true;
+		["McAfee Total Protection"] = true;
+		["McAfee AntiVirus"] = true;
+		["McAfee Endpoint Security"] = true;
+		["McAfee VirusScan"] = true;
+		["McAfee"] = true;
+		["Norton Security"] = true;
+		["Norton 360"] = true;
+		["Norton AntiVirus"] = true;
+		["Norton Internet Security"] = true;
+		["Norton"] = true;
+		["Avast Free Antivirus"] = true;
+		["Avast Premium Security"] = true;
+		["Avast"] = true;
+		["AVG AntiVirus"] = true;
+		["AVG Internet Security"] = true;
+		["AVG"] = true;
+		["Kaspersky Internet Security"] = true;
+		["Kaspersky Total Security"] = true;
+		["Kaspersky Security Cloud"] = true;
+		["Kaspersky Anti-Virus"] = true;
+		["Kaspersky Endpoint Security"] = true;
+		["Kaspersky"] = true;
+		["ESET NOD32 Antivirus"] = true;
+		["ESET Internet Security"] = true;
+		["ESET Smart Security"] = true;
+		["ESET Endpoint Security"] = true;
+		["ESET"] = true;
+		["Sophos Home"] = true;
+		["Sophos Endpoint"] = true;
+		["Sophos Anti-Virus"] = true;
+		["Sophos"] = true;
+		["Trend Micro OfficeScan"] = true;
+		["Trend Micro Internet Security"] = true;
+		["Trend Micro"] = true;
+		["Bitdefender Antivirus Free"] = true;
+		["Bitdefender Total Security"] = true;
+		["Bitdefender Internet Security"] = true;
+		["Bitdefender Antivirus"] = true;
+		["Bitdefender Endpoint Security"] = true;
+		["Bitdefender"] = true;
+		["Avira Antivirus"] = true;
+		["Avira Free Security"] = true;
+		["Avira"] = true;
+		["Panda Antivirus"] = true;
+		["Panda Dome"] = true;
+		["Panda"] = true;
+		["Malwarebytes"] = true;
+		["G DATA"] = true;
+		["F-Secure"] = true;
+		["Comodo Antivirus"] = true;
+		["Comodo Internet Security"] = true;
+		["Comodo"] = true;
+		["Dr.Web"] = true;
+		["DrWeb"] = true;
+		["安恒信息"] = true;
+		["绿盟科技"] = true;
+		["NSFOCUS"] = true;
+		["启明星辰"] = true;
+		["Venustech"] = true;
+	}
+
+	// 排除的子组件关键词
+	var avComponentBlacklist = {
+		["Update"] = true; ["Updates"] = true; ["Updater"] = true;
+		["Plugin"] = true; ["Plug-in"] = true; ["Extension"] = true;
+		["Helper"] = true;
+		["SDK"] = true; ["Tools"] = true; ["Console"] = true;
+		["Localization"] = true; ["Language"] = true; ["Language Pack"] = true;
+		["Driver"] = true; ["Drivers"] = true;
+		["Crash"] = true; ["Reporter"] = true;
+		["Uninstall"] = true; ["Setup"] = true;
+		["Online"] = true; ["Offline"] = true; ["Web Scanner"] = true;
+		["Boot"] = true; ["Rescue"] = true; ["Rescue Disk"] = true;
+	}
+
+	// 第四步+第五步：日期格式化与多源回退（办公软件和杀软统一处理）
+	// 核心思路：InstallDate 会被升级改写，子键创建时间也不总是可靠
+	// 但安装目录的创建时间通常不会被修改（升级只改文件不改目录）
+	// 因此同时收集三个来源，取最早的作为真实安装日期
+	var formatYmd = function(d){
+		if(!d || d == "") return "";
+		if(..type(d) == "number") d = ..tostring(d);
+		if(..type(d) == "string") {
+			d = ..string.trim(d);
+			// string.match 返回多个值（每个捕获组一个），不是数组
+			var year, month, day = ..string.match(d, "^(\d{4})(\d{2})(\d{2})$");
+			if(year && month && day) {
+				var m = ..tonumber(month);
+				var dd = ..tonumber(day);
+				if(m >= 1 && m <= 12 && dd >= 1 && dd <= 31) {
+					return year ++ "-" ++ month ++ "-" ++ day;
+				}
+			}
+			var py, pm, pd = ..string.match(d, "^(\d{4})[-/](\d{1,2})[-/](\d{1,2})");
+			if(py && pm && pd) {
+				return py ++ "-" ++ ..string.format("%02d", ..tonumber(pm)) ++ "-" ++ ..string.format("%02d", ..tonumber(pd));
+			}
+		}
+		return "";
+	};
+
+	var formatFileTime = function(writeTime){
+		if(!writeTime) return "";
+		var ft = ..fsys.time(writeTime);
+		if(!ft) return "";
+		var st = ft.local(true).toSystemTime();
+		if(!st || !st.year || ..tonumber(st.year) < 2000) return "";
+		return ..string.format("%04d-%02d-%02d", ..tonumber(st.year), ..tonumber(st.month), ..tonumber(st.day));
+	};
+
+	// 读取安装目录创建时间（目录在升级时通常不会被重建）
+	var getLocationDate = function(path){
+		if(!path || #path == 0) return "";
+		if(!..io.exist(path)) return "";
+		var result = "";
+		try {
+			var info = ..fsys.info(path);
+			if(info && info.creationTime) {
+				var ft = ..fsys.time(info.creationTime);
+				if(ft) {
+					var st = ft.local(true).toSystemTime();
+					if(st && st.year && ..tonumber(st.year) > 2000) {
+						result = ..string.format("%04d-%02d-%02d", ..tonumber(st.year), ..tonumber(st.month), ..tonumber(st.day));
+					}
+				}
+			}
+		}
+		catch(e) {}
+		return result;
+	};
+
+	// 收集所有候选日期，取最早的（升级会改 InstallDate 和部分文件，但目录创建时间通常最早且最可靠）
+	var collectDates = function(record){
+		var dates = {};
+		var d1 = formatYmd(record.installDate);
+		if(d1 != "") ..table.push(dates, d1);
+		var d2 = formatFileTime(record.keyWriteTime);
+		if(d2 != "") ..table.push(dates, d2);
+		var d3 = getLocationDate(record.installLocation);
+		if(d3 != "") ..table.push(dates, d3);
+		// 取最早日期
+		var earliest = "";
+		for i = 1; #dates {
+			if(earliest == "" || dates[i] < earliest) {
+				earliest = dates[i];
+			}
+		}
+		return earliest;
+	};
+
+	// 在匹配阶段保存完整记录，避免后续反查
+	var officeRecords = {};
+	var avRecords = {};
+
+	// 重新遍历：办公软件
+	for k, v in programs {
+		if(v.systemComponent) continue;
+		if(v.parentKey && #v.parentKey > 0) continue;
+		if(officeNameBlacklist[v.name] === true) continue;
+		var isComponent = false;
+		for i = 1; #componentKeywords {
+			if(..string.find(v.name, componentKeywords[i])) {
+				isComponent = true;
+				break;
+			}
+		}
+		if(isComponent) continue;
+		if(!matchOfficeProduct(v.name)) continue;
+		..table.push(officeRecords, v);
+	}
+
+	// 重新遍历：杀毒软件
+	for k, v in programs {
+		if(v.systemComponent) continue;
+		if(v.parentKey && #v.parentKey > 0) continue;
+		if(!avProductNames[v.name]) continue;
+		var isComponent = false;
+		for word, _ in avComponentBlacklist {
+			if(..string.find(v.name, " " ++ word ++ " ") || ..string.find(v.name, " " ++ word)) {
+				isComponent = true;
+				break;
+			}
+		}
+		if(isComponent) continue;
+		..table.push(avRecords, v);
+	}
+
+	// WMI 补充杀软（无日期）
+	try {
+		import com.wmi;
+		for props, i in ..com.wmi.eachProperties("AntiVirusProduct", "root\SecurityCenter2") {
+			var displayName = props[["displayName"]];
+			if(!displayName || displayName == "") continue;
+			var exists = false;
+			for j = 1; #avRecords {
+				if(..string.lower(avRecords[j].name) == ..string.lower(displayName)) {
+					exists = true;
+					break;
+				}
+			}
+			if(!exists) {
+				..table.push(avRecords, {name = displayName; installDate = ""; keyWriteTime = null; installLocation = ""});
+			}
+		}
+	}
+	catch(e) {
+	}
+
+	// 提取名称和日期
+	var office = {};
+	var finalOfficeDate = {};
+	for i = 1; #officeRecords {
+		..table.push(office, officeRecords[i].name);
+		..table.push(finalOfficeDate, collectDates(officeRecords[i]));
+	}
+
+	var antivirus = {};
+	var finalAvDate = {};
+	for i = 1; #avRecords {
+		..table.push(antivirus, avRecords[i].name);
+		..table.push(finalAvDate, collectDates(avRecords[i]));
+	}
+
+	var cleanJoined = function(parts, sep){
+		if(#parts == 0) return "";
+		var valid = {};
+		for i = 1; #parts {
+			var s = ..string.trim(..tostring(parts[i]));
+			if(s != "" && s != sep) ..table.push(valid, s);
+		}
+		return #valid > 0 ? ..string.join(valid, sep) : "";
+	};
+
+	return {
+		office = #office > 0 ? ..string.join(office, ";") : "未获取";
+		officeDate = #cleanJoined(finalOfficeDate, ";") > 0 ? cleanJoined(finalOfficeDate, ";") : "未获取";
+		antivirus = #antivirus > 0 ? ..string.join(antivirus, ";") : "未获取";
+		avDate = #cleanJoined(finalAvDate, ";") > 0 ? cleanJoined(finalAvDate, ";") : "未获取";
+	};
+}
+
+memory = function(){
+	import com.wmi;
+	var memories = {};
+	for props, i in ..com.wmi.eachProperties("Win32_PhysicalMemory") {
+		var manufacturer = props[["Manufacturer"]] || "未知";
+		var capacity = ..tonumber(props[["Capacity"]]) || 0;
+		var speed = props[["Speed"]] || "";
+		var sizeGb = ..math.floor(capacity / 1024 / 1024 / 1024 + 0.5);
+		manufacturer = ..string.trim(manufacturer);
+		var model = manufacturer ++ (speed ? (" DDR" ++ ..tostring(speed)) : "");
+		..table.push(memories, {model=model; size=..tostring(sizeGb) ++ " GB"});
+	}
+	
+	if(#memories == 0) return {{model="未获取"; size="未获取"}};
+	return memories;
+}
+
+disk = function(){
+	import com.wmi;
+	var disks = {};
+	for props, i in ..com.wmi.eachProperties("Win32_DiskDrive") {
+		var model = props[["Model"]] || "未知";
+		var size = ..tonumber(props[["Size"]]) || 0;
+		var serial = props[["SerialNumber"]] || "未获取";
+		var sizeGb = size / 1024 / 1024 / 1024;
+		var sizeStr;
+		if(sizeGb >= 1000) {
+			sizeStr = ..string.format("%.1f TB", sizeGb / 1024);
+		}
+		else {
+			sizeStr = ..string.format("%.0f GB", sizeGb);
+		}
+		model = ..string.trim(model);
+		serial = ..string.trim(serial);
+		var cleanSerial = ..string.match(serial, "^([a-zA-Z0-9%-]+)");
+		if(cleanSerial && #cleanSerial >= 3) serial = cleanSerial;
+		..table.push(disks, {model=model; size=sizeStr; serial=serial});
+	}
+	
+	if(#disks == 0) return {{model="未获取"; size="未获取"; serial="未获取"}};
+	return disks;
+}
+
+all = function(){
+	import com.wmi;
+	import sys.installed;
+	
+	var result = {};
+	
+	try { result.hostname = hostname(); }
+	catch(e) { result.hostname = "未获取"; }
+	
+	try {
+		var net = network();
+		result.ips = net.ips;
+		result.macs = net.macs;
+	}
+	catch(e) {
+		result.ips = {"未获取"};
+		result.macs = {"未获取"};
+	}
+	
+	try { result.osver = osver(); }
+	catch(e) { result.osver = "未获取"; }
+	
+	try { result.pcId = pcId(); }
+	catch(e) { result.pcId = "未获取"; }
+	
+	try { result.pcBrand = brand(); }
+	catch(e) { result.pcBrand = "未获取"; }
+	
+	try {
+		var sw = software();
+		result.office = sw.office;
+		result.officeDate = sw.officeDate;
+		result.antivirus = sw.antivirus;
+		result.avDate = sw.avDate;
+	}
+	catch(e) {
+		result.office = "未获取";
+		result.officeDate = "未获取";
+		result.antivirus = "未获取";
+		result.avDate = "未获取";
+	}
+	
+	try { result.memories = memory(); }
+	catch(e) { result.memories = {{model="未获取"; size="未获取"}}; }
+	
+	try { result.disks = disk(); }
+	catch(e) { result.disks = {{model="未获取"; size="未获取"; serial="未获取"}}; }
+	
+	return result;
+}

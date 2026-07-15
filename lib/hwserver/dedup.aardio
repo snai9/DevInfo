@@ -1,0 +1,12 @@
+import sqlite;
+
+namespace hwserver.dedup;
+
+exists = function(db, record){
+	var row = db.stepQuery(
+		"SELECT COUNT(*) as cnt FROM hwinfo WHERE used=? AND hostname=? AND ips=? AND macs=? AND osver=? AND office=? AND antivirus=? AND memories=? AND disks=?",
+		{record.used; record.hostname; record.ips; record.macs; record.osver; record.office; record.antivirus; record.memories; record.disks}
+	);
+	if(!row) return false;
+	return tonumber(row[["cnt"]]) > 0;
+}

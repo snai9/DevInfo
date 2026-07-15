@@ -1,0 +1,95 @@
+import wsock.tcp.simpleHttpServer;
+import thread.command;
+import io;
+
+namespace hwserver.api;
+
+start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
+	if(!ip) ip = "0.0.0.0";
+	if(!port) port = 8080;
+	if(!_dbPath) _dbPath = ..io.appData("hwinfo/hwinfo.db");
+	
+	var serverMain = ..wsock.tcp.simpleHttpServer.mainThread(
+		function(response, request, session){
+			response.contentType = "application/json";
+			
+			if(request.pathInfo == "/api/ping") {
+				response.write({code=0; msg="pong"});
+				return;
+			}
+			
+			if(request.pathInfo == "/api/upload" && request.method == "POST") {
+				var data = request.postJson();
+				if(!data) {
+					response.status = "400 Bad Request";
+					response.write({code=-1; msg="数据格式错误"});
+					return;
+				}
+				
+				import sqlite;
+				import hwserver.data;
+				import string;
+				import thread.command;
+				
+				var db = sqlite(dbPath);
+				if(!db) {
+					response.status = "500 Internal Server Error";
+					response.write({code=-1; msg="数据库打开失败"});
+					return;
+				}
+				
+				var result = hwserver.data.insert(db, data);
+				db.close();
+				
+				if(result[["code"]] >= 0 && notifierHwnd) {
+					thread.command.post(notifierHwnd, "onUpload");
+				}
+				
+				if(result[["code"]] == -1 && string.find(result[["msg"]], "校验失败")) {
+					response.status = "400 Bad Request";
+				}
+				elseif(result[["code"]] == -1) {
+					response.status = "500 Internal Server Error";
+				}
+				response.write(result);
+				return;
+			}
+			
+			if(request.pathInfo == "/api/records" && request.method == "GET") {
+				import sqlite;
+				import hwserver.data;
+				import string;
+				
+				var db = sqlite(dbPath);
+				if(!db) {
+					response.status = "500 Internal Server Error";
+					response.write({code=-1; msg="数据库连接失败"});
+					return;
+				}
+				
+				var unit;
+				var m = string.match(request.url, "unit=([^&]+)");
+				if(m) unit = ..inet.url.decode(m);
+				
+				var result = hwserver.data.queryAll(db, unit);
+				db.close();
+				response.write(result);
+				return;
+			}
+			
+			response.status = "404 Not Found";
+			response.write({code=-1; msg="Not Found"});
+		}
+	);
+	
+	serverMain.threadGlobal = { dbPath = _dbPath; notifierHwnd = _notifierHwnd };
+	serverMain.threadNum = 4;
+	var ok, errMsg = serverMain.start(ip, port);
+	
+	if(onStatus) {
+		if(ok) onStatus(true, "服务已启动：" ++ serverMain.getUrl());
+		else onStatus(false, "启动失败：" ++ (errMsg || "未知错误"));
+	}
+	
+	return serverMain, ok, errMsg;
+}

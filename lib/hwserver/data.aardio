@@ -1,0 +1,146 @@
+import sqlite;
+import time;
+import string;
+import JSON;
+
+namespace hwserver.data;
+
+serializeIps = function(ips){
+	if(..type(ips) == "string") return ips;
+	if(..type(ips) == "table") return ..string.join(ips, ", ");
+	return "";
+}
+
+serializeMacs = function(macs){
+	if(..type(macs) == "string") return macs;
+	if(..type(macs) == "table") return ..string.join(macs, ", ");
+	return "";
+}
+
+serializeMemories = function(memories){
+	if(..type(memories) == "string") return memories;
+	if(..type(memories) == "table") {
+		var parts = {};
+		for i = 1; #memories {
+			var m = memories[i];
+			if(..type(m) == "table") {
+				..table.push(parts, (m[["model"]] || "") ++ " " ++ (m[["size"]] || ""));
+			}
+			else {
+				..table.push(parts, ..tostring(m));
+			}
+		}
+		return ..string.join(parts, '\r\n');
+	}
+	return "";
+}
+
+serializeDisks = function(disks){
+	if(..type(disks) == "string") return disks;
+	if(..type(disks) == "table") {
+		var parts = {};
+		for i = 1; #disks {
+			var d = disks[i];
+			if(..type(d) == "table") {
+				..table.push(parts, (d[["model"]] || "") ++ " " ++ (d[["size"]] || "") ++ " " ++ (d[["serial"]] || ""));
+			}
+			else {
+				..table.push(parts, ..tostring(d));
+			}
+		}
+		return ..string.join(parts, '\r\n');
+	}
+	return "";
+}
+
+insert = function(db, data){
+	if(!data[["used"]] or ..string.trim(data[["used"]]) == "") {
+		return {code=-1; msg="数据校验失败：使用人姓名不能为空"};
+	}
+	if(!data[["unit"]] or ..string.trim(data[["unit"]]) == "") {
+		return {code=-1; msg="数据校验失败：单位不能为空"};
+	}
+	if(!data[["dept"]] or ..string.trim(data[["dept"]]) == "") {
+		return {code=-1; msg="数据校验失败：部门及位置不能为空"};
+	}
+	if(!data[["hostname"]] or ..string.trim(data[["hostname"]]) == "") {
+		return {code=-1; msg="数据校验失败：计算机名不能为空"};
+	}
+	
+	var record = {};
+	record.used = ..string.trim(data[["used"]]);
+	record.unit = ..string.trim(data[["unit"]]);
+	record.dept = ..string.trim(data[["dept"]]);
+	record.pcId = data[["pcId"]] || "";
+	record.hostname = ..string.trim(data[["hostname"]]);
+	record.ips = serializeIps(data[["ips"]]);
+	record.macs = serializeMacs(data[["macs"]]);
+	record.osver = data[["osver"]] || "";
+	record.pcBrand = data[["pcBrand"]] || "";
+	record.office = data[["office"]] || "";
+	record.officeDate = data[["officeDate"]] || "";
+	record.antivirus = data[["antivirus"]] || "";
+	record.avDate = data[["avDate"]] || "";
+	record.memories = serializeMemories(data[["memories"]]);
+	record.disks = serializeDisks(data[["disks"]]);
+	
+	var now = ..time();
+	var uploadTime = ..string.format("%04d-%02d-%02d %02d:%02d:%02d",
+		now.year, now.month, now.day, now.hour, now.minute, now.second);
+	
+	db.beginTrans();
+	var row = db.stepQuery(
+		"SELECT COUNT(*) as cnt FROM hwinfo WHERE used=? AND unit=? AND dept=? AND pcId=? AND hostname=? AND ips=? AND macs=? AND osver=? AND pcBrand=? AND office=? AND officeDate=? AND antivirus=? AND avDate=? AND memories=? AND disks=?",
+		{record.used; record.unit; record.dept; record.pcId; record.hostname; record.ips; record.macs; record.osver; record.pcBrand; record.office; record.officeDate; record.antivirus; record.avDate; record.memories; record.disks}
+	);
+	var cnt = row ? ..tonumber(row[["cnt"]]) : 0;
+	
+	if(cnt > 0) {
+		db.commitTrans();
+		return {code=1; msg="记录已存在"};
+	}
+	
+	var sql = "INSERT INTO hwinfo (used,unit,dept,pcId,hostname,ips,macs,osver,pcBrand,office,officeDate,antivirus,avDate,memories,disks,uploadTime) VALUES ("
+		++ ..sqlite.escape(record.used) ++ ","
+		++ ..sqlite.escape(record.unit) ++ ","
+		++ ..sqlite.escape(record.dept) ++ ","
+		++ ..sqlite.escape(record.pcId) ++ ","
+		++ ..sqlite.escape(record.hostname) ++ ","
+		++ ..sqlite.escape(record.ips) ++ ","
+		++ ..sqlite.escape(record.macs) ++ ","
+		++ ..sqlite.escape(record.osver) ++ ","
+		++ ..sqlite.escape(record.pcBrand) ++ ","
+		++ ..sqlite.escape(record.office) ++ ","
+		++ ..sqlite.escape(record.officeDate) ++ ","
+		++ ..sqlite.escape(record.antivirus) ++ ","
+		++ ..sqlite.escape(record.avDate) ++ ","
+		++ ..sqlite.escape(record.memories) ++ ","
+		++ ..sqlite.escape(record.disks) ++ ","
+		++ ..sqlite.escape(uploadTime) ++ ")";
+	db.exec(sql);
+	db.commitTrans();
+	return {code=0; msg="上传成功"};
+}
+
+queryAll = function(db, unit){
+	var sql;
+	var rows;
+	if(unit && unit != "" && unit != "全部") {
+		rows = db.getTable("SELECT * FROM hwinfo WHERE unit=" ++ ..sqlite.escape(unit) ++ " ORDER BY uploadTime DESC");
+	}
+	else {
+		rows = db.getTable("SELECT * FROM hwinfo ORDER BY uploadTime DESC");
+	}
+	if(!rows) return {code=0; data={}};
+	return {code=0; data=rows};
+}
+
+getUnits = function(db){
+	var rows = db.getTable("SELECT DISTINCT unit FROM hwinfo WHERE unit != '' ORDER BY unit");
+	if(!rows) return {};
+	var units = {};
+	for i = 1; #rows {
+		..table.push(units, rows[i][["unit"]]);
+	}
+	return units;
+}

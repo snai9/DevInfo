@@ -1,0 +1,112 @@
+import win.ui;
+import win.dlg.message;
+
+namespace hwinfo.namedlg;
+
+show = function(parent, defaultUsed, defaultUnit, defaultDept){
+	var dlg = ..win.form(
+		text="请输入使用者信息";
+		parent=parent;
+		border="dialog window";
+		bgcolor=0xE0F0F8;
+		right=399; bottom=299;
+		center=1;
+		mode="popup"
+	)
+	dlg.add(
+		lblName={cls="static"; text="使用人姓名："; left=24; top=20; right=140; bottom=40; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editName={cls="plus"; left=148; top=16; right=376; bottom=44; edge=1; editable=1; font=LOGFONT(h=-14); textPadding={top=6;bottom=2}; z=1};
+		lblUnit={cls="static"; text="所在单位："; left=24; top=60; right=140; bottom=80; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		cmbUnit={cls="combobox"; left=148; top=56; right=376; bottom=160; edge=1; font=LOGFONT(h=-14); items={"局机关";"维权中心";"档案中心";"信息中心";"社保中心";"就业局"}; z=2};
+		lblDept={cls="static"; text="部门及位置："; left=24; top=100; right=140; bottom=120; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editDept={cls="plus"; left=148; top=96; right=376; bottom=124; edge=1; editable=1; font=LOGFONT(h=-14); textPadding={top=6;bottom=2}; z=3};
+		btnOk={cls="plus"; text="确定"; left=120; top=228; right=210; bottom=262; z=4};
+		btnCancel={cls="plus"; text="取消"; left=230; top=228; right=320; bottom=262; z=5}
+	)
+	
+	dlg.editName.text = defaultUsed || "";
+	if(defaultUnit && defaultUnit != "") {
+		var units = {"局机关";"维权中心";"档案中心";"信息中心";"社保中心";"就业局"};
+		for i = 1; #units {
+			if(units[i] == defaultUnit) {
+				dlg.cmbUnit.selIndex = i;
+				break;
+			}
+		}
+	}
+	dlg.editDept.text = defaultDept || "";
+	dlg.editName.setFocus();
+	
+	dlg.editName.skin({
+		background = {default=0xFFFFFFFF; disabled=0xFFF8F0E0};
+		color = {default=0xFF666666; disabled=0xFF888888}
+	})
+	
+	dlg.editDept.skin({
+		background = {default=0xFFFFFFFF; disabled=0xFFF8F0E0};
+		color = {default=0xFF666666; disabled=0xFF888888}
+	})
+	
+	dlg.btnOk.skin({
+		background = {
+			default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC
+		};
+		color = {
+			default=0xFFFFFFFF; disabled=0xFF888888
+		}
+	})
+	
+	dlg.btnCancel.skin({
+		background = {
+			default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777; disabled=0xFFCCCCCC
+		};
+		color = {
+			default=0xFFFFFFFF; disabled=0xFF888888
+		}
+	})
+	
+	var result;
+	
+	dlg.btnOk.oncommand = function(id, event){
+		var name = ..string.trim(dlg.editName.text);
+		if(!name || name == "") {
+			dlg.msgbox("请输入使用人姓名");
+			dlg.editName.setFocus();
+			return;
+		}
+		if(#name > 20) {
+			dlg.msgbox("姓名长度不能超过20个字符");
+			dlg.editName.setFocus();
+			return;
+		}
+		if(!dlg.cmbUnit.selIndex or dlg.cmbUnit.selIndex == 0) {
+			dlg.msgbox("请选择所在单位");
+			return;
+		}
+		var dept = ..string.trim(dlg.editDept.text);
+		if(!dept || dept == "") {
+			dlg.msgbox("请输入部门及位置");
+			dlg.editDept.setFocus();
+			return;
+		}
+		if(#dept > 50) {
+			dlg.msgbox("部门及位置长度不能超过50个字符");
+			dlg.editDept.setFocus();
+			return;
+		}
+		result = {used=name; unit=dlg.cmbUnit.items[dlg.cmbUnit.selIndex]; dept=dept};
+		dlg.close();
+	}
+	
+	dlg.btnCancel.oncommand = function(id, event){
+		result = null;
+		dlg.close();
+	}
+	
+	dlg.reghotkey(function(){
+		dlg.btnOk.oncommand();
+	}, 0, 0x0D);
+	
+	dlg.doModal();
+	return result;
+}
