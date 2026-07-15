@@ -108,6 +108,7 @@ software = function(){
 				var publisher = r.queryValue("Publisher") || "";
 				var installDate = r.queryValue("InstallDate") || "";
 				var installLocation = r.queryValue("InstallLocation") || "";
+				var displayVersion = r.queryValue("DisplayVersion") || "";
 				r.close();
 
 				name = ..string.trim(name);
@@ -125,6 +126,7 @@ software = function(){
 					all[name] = {
 						id = k;
 						name = name;
+						version = ..string.trim(displayVersion);
 						publisher = ..string.trim(publisher);
 						systemComponent = (sysComp == 1);
 						parentKey = parentKey;
@@ -174,7 +176,7 @@ software = function(){
 	};
 
 	// 第三步：精准识别杀毒软件
-	// 思路：DisplayName 必须是已知的杀软主程序名
+	// 思路：杀软产品名前缀匹配 + 精确名称匹配
 	// 不能用 Publisher 白名单，因为 Microsoft / Tencent 等公司有很多非杀软产品
 	var avProductNames = {
 		["Windows Defender"] = true;
@@ -258,6 +260,25 @@ software = function(){
 		["NSFOCUS"] = true;
 		["启明星辰"] = true;
 		["Venustech"] = true;
+		["2345安全卫士"] = true;
+		["安全卫士-2345"] = true;
+	}
+	// 前缀匹配：DisplayName 以这些开头即视为杀软（覆盖版本号变体如"2345安全卫士 V12"）
+	var avPrefixes = {
+		"360 安全卫士"; "360 杀毒"; "360Safe"; "360 Total Security";
+		"腾讯电脑管家"; "QQ电脑管家"; "电脑管家";
+		"火绒安全软件"; "火绒"; "Huorong";
+		"奇安信天擎"; "天擎"; "奇安信";
+		"深信服"; "Sangfor";
+		"瑞星杀毒"; "瑞星"; "Rising";
+		"McAfee"; "Norton"; "Avast"; "AVG";
+		"Kaspersky"; "ESET"; "Sophos"; "Trend Micro"; "Bitdefender";
+		"Avira"; "Panda"; "Malwarebytes"; "G DATA"; "F-Secure"; "Comodo";
+		"Dr.Web"; "DrWeb";
+		"2345安全卫士"; "2345杀毒"; "2345";
+		"安全卫士 - 2345"; "安全卫士";
+		"Microsoft Defender"; "Microsoft Security Essentials"; "Windows Defender";
+		"安恒信息"; "绿盟科技"; "NSFOCUS"; "启明星辰"; "Venustech";
 	}
 
 	// 排除的子组件关键词
@@ -370,11 +391,18 @@ software = function(){
 		..table.push(officeRecords, v);
 	}
 
-	// 重新遍历：杀毒软件
+	// 重新遍历：杀毒软件（精确匹配 + 前缀匹配）
+	var matchAvProduct = function(name){
+		if(avProductNames[name]) return true;
+		for i = 1; #avPrefixes {
+			if(..string.find(name, avPrefixes[i]) == 1) return true;
+		}
+		return false;
+	};
 	for k, v in programs {
 		if(v.systemComponent) continue;
 		if(v.parentKey && #v.parentKey > 0) continue;
-		if(!avProductNames[v.name]) continue;
+		if(!matchAvProduct(v.name)) continue;
 		var isComponent = false;
 		for word, _ in avComponentBlacklist {
 			if(..string.find(v.name, " " ++ word ++ " ") || ..string.find(v.name, " " ++ word)) {
@@ -407,18 +435,23 @@ software = function(){
 	catch(e) {
 	}
 
+	var nameWithVersion = function(rec){
+		if(rec.version && rec.version != "") return rec.name ++ " " ++ rec.version;
+		return rec.name;
+	};
+
 	// 提取名称和日期
 	var office = {};
 	var finalOfficeDate = {};
 	for i = 1; #officeRecords {
-		..table.push(office, officeRecords[i].name);
+		..table.push(office, nameWithVersion(officeRecords[i]));
 		..table.push(finalOfficeDate, collectDates(officeRecords[i]));
 	}
 
 	var antivirus = {};
 	var finalAvDate = {};
 	for i = 1; #avRecords {
-		..table.push(antivirus, avRecords[i].name);
+		..table.push(antivirus, nameWithVersion(avRecords[i]));
 		..table.push(finalAvDate, collectDates(avRecords[i]));
 	}
 
