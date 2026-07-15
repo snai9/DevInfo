@@ -24,7 +24,10 @@ editPort={cls="plus";left=92;top=10;right=180;bottom=38;dl=1;dt=1;edge=1;editabl
 grpRecords={cls="groupbox";text="已收集的硬件信息记录";left=12;top=76;right=948;bottom=556;color=0x0B86B8;db=1;dl=1;dr=1;dt=1;font=LOGFONT(h=-13);z=2};
 lblPort={cls="static";text="监听端口：";left=16;top=14;right=88;bottom=34;bgcolor=0xE0F0F8;color=0x0B86B8;dl=1;dt=1;font=LOGFONT(h=-14);z=3};
 lblStatus={cls="static";text="状态：未启动";left=420;top=14;right=940;bottom=34;bgcolor=0xE0F0F8;color=0x999999;dl=1;dr=1;dt=1;font=LOGFONT(h=-14);z=1};
-lblUnit={cls="static";text="按单位筛选：";left=24;top=50;right=110;bottom=70;color=0x0B86B8;dl=1;dt=1;z=13};
+	lblUnit={cls="static";text="按单位筛选：";left=24;top=50;right=110;bottom=70;color=0x0B86B8;dl=1;dt=1;z=13};
+	editSearch={cls="edit";left=320;top=48;right=700;bottom=72;color=0x666666;dl=1;dt=1;edge=1;font=LOGFONT(h=-13);z=14};
+	btnSearch={cls="plus";text="搜索";left=706;top=48;right=780;bottom=72;dl=1;dt=1;z=15};
+	lblSearch={cls="static";text="关键词：";left=250;top=50;right=316;bottom=70;color=0x0B86B8;dl=1;dt=1;z=16};
 vlist={cls="vlistEx";left=24;top=92;right=936;bottom=516;ah=1;aw=1;bgcolor=0xE0F0F8;db=1;dl=1;dr=1;dt=1;edge=1;z=7}
 )
 /*}}*/
@@ -104,6 +107,10 @@ var applySkin = function(){
 		background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4; disabled=0xFFCCCCCC};
 		color = {default=0xFFFFFFFF; disabled=0xFF888888}
 	})
+	winform.btnSearch.skin({
+		background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+		color = {default=0xFFFFFFFF; disabled=0xFF888888}
+	})
 }
 applySkin();
 
@@ -120,17 +127,29 @@ var refreshUnitFilter = function(){
 	winform.cmbUnit.selIndex = 1;
 }
 
-var loadRecords = function(unit){
+var loadRecords = function(unit, keyword){
 	var db = sqlite(dbPath);
 	if(!db) return;
 	
-	var rows;
+	var where = {};
 	if(unit && unit != "" && unit != "全部") {
-		rows = db.getTable("SELECT * FROM hwinfo WHERE unit=" ++ sqlite.escape(unit) ++ " ORDER BY uploadTime DESC");
+		..table.push(where, "unit=" ++ sqlite.escape(unit));
 	}
-	else {
-		rows = db.getTable("SELECT * FROM hwinfo ORDER BY uploadTime DESC");
+	if(keyword && keyword != "") {
+		var kw = "%" ++ keyword ++ "%";
+		var searchCols = {"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"antivirus"};
+		var orParts = {};
+		for i = 1; #searchCols {
+			..table.push(orParts, searchCols[i] ++ " LIKE " ++ sqlite.escape(kw));
+		}
+		..table.push(where, "(" ++ ..string.join(orParts, " OR ") ++ ")");
 	}
+	
+	var sql = "SELECT * FROM hwinfo";
+	if(#where > 0) sql = sql ++ " WHERE " ++ ..string.join(where, " AND ");
+	sql = sql ++ " ORDER BY uploadTime DESC";
+	
+	var rows = db.getTable(sql);
 	db.close();
 	if(!rows) return;
 	
@@ -166,14 +185,14 @@ var loadRecords = function(unit){
 var notifier = thread.command(winform);
 notifier.onUpload = function(){
 	refreshUnitFilter();
-	loadRecords();
+	loadRecords(null, ..string.trim(winform.editSearch.text));
 }
 
 winform.cmbUnit.oncommand = function(id,event){
 	var idx = winform.cmbUnit.selIndex;
 	if(!idx) return;
 	var unit = winform.cmbUnit.items[idx];
-	loadRecords(unit);
+	loadRecords(unit, ..string.trim(winform.editSearch.text));
 }
 
 winform.btnStart.oncommand = function(id, event){
@@ -195,7 +214,7 @@ winform.btnStart.oncommand = function(id, event){
 		winform.btnStop.disabled = false;
 		winform.editPort.disabled = true;
 		refreshUnitFilter();
-		loadRecords();
+		loadRecords(null, ..string.trim(winform.editSearch.text));
 	}
 	else {
 		winform.msgbox("服务启动失败：" ++ (errMsg || "未知错误"));
@@ -218,7 +237,19 @@ winform.btnRefresh.oncommand = function(id, event){
 	refreshUnitFilter();
 	var idx = winform.cmbUnit.selIndex;
 	var unit = idx ? winform.cmbUnit.items[idx] : "全部";
-	loadRecords(unit);
+	loadRecords(unit, ..string.trim(winform.editSearch.text));
+}
+
+winform.btnSearch.oncommand = function(id, event){
+	var idx = winform.cmbUnit.selIndex;
+	var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+	loadRecords(unit, ..string.trim(winform.editSearch.text));
+}
+
+winform.editSearch.onOk = function(){
+	var idx = winform.cmbUnit.selIndex;
+	var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+	loadRecords(unit, ..string.trim(winform.editSearch.text));
 }
 
 var showEditDialog = function(row){
@@ -339,7 +370,9 @@ var showEditDialog = function(row){
 		db2.exec(sql);
 		db2.close();
 		dlg.close();
-		loadRecords();
+		var idx = winform.cmbUnit.selIndex;
+		var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+		loadRecords(unit, ..string.trim(winform.editSearch.text));
 	}
 	dlg.btnCancel.oncommand = function(id, event){
 		dlg.close();
@@ -387,7 +420,9 @@ winform.btnDelete.oncommand = function(id, event){
 		db.exec("DELETE FROM hwinfo WHERE id=" ++ idText);
 	}
 	db.close();
-	loadRecords();
+	var idx = winform.cmbUnit.selIndex;
+	var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+	loadRecords(unit, ..string.trim(winform.editSearch.text));
 }
 
 winform.btnExport.oncommand = function(id, event){
@@ -431,7 +466,7 @@ winform.btnExport.oncommand = function(id, event){
 	winform.msgbox("导出成功！\n" ++ path);
 }
 
-loadRecords();
+loadRecords(null, "");
 
 winform.show();
 winform.vlist.fitColWidth({1;2;3;4;5;6;7;8;9;10;11;12;13;14;17},20,true);
