@@ -164,35 +164,6 @@ notifier.onTimeout = function(){
 	}
 };
 
-notifier.onCollectDone = function(data){
-	winform.btnRefresh.disabled = false;
-	updateUI(data, null);
-	if(!data) {
-		setStatus('\uF057', '采集失败', 0x0000CC);
-	}
-	else {
-		setStatus('\uF058', '采集完成 — ' ++ (data.hostname || ""), 0x0B86B8);
-	}
-};
-
-notifier.onUploadDone = function(result){
-	winform.btnUpload.disabled = false;
-	winform.btnUpload.text = "上传信息";
-	if(result[["code"]] == 0) {
-		setStatus('\uF058', '上传成功', 0x008800);
-		setServerStatus(true);
-		winform.msgbox("上传成功");
-	}
-	elseif(result[["code"]] == 1) {
-		setStatus('\uF058', '记录已存在', 0xB8860B);
-		setServerStatus(true);
-		winform.msgbox("记录已存在，无需重复上传");
-	}
-	else {
-		setStatus('\uF057', '上传失败', 0x0000CC);
-		winform.msgbox(result[["msg"]] || "上传失败");
-	}
-};
 
 var checkServer = function(){
 	setStatus('\uF110', '检测服务器...', 0xB8860B);
@@ -373,6 +344,36 @@ var doCollect = function(){
 		}, winform.hwnd
 	);
 }
+
+notifier.onCollectDone = function(data){
+	winform.btnRefresh.disabled = false;
+	updateUI(data, null);
+	if(!data) {
+		setStatus('\uF057', '采集失败', 0x0000CC);
+	}
+	else {
+		setStatus('\uF058', '采集完成 — ' ++ (data.hostname || ""), 0x0B86B8);
+	}
+};
+
+notifier.onUploadDone = function(result){
+	winform.btnUpload.disabled = false;
+	winform.btnUpload.text = "上传信息";
+	if(result[["code"]] == 0) {
+		setStatus('\uF058', '上传成功', 0x008800);
+		setServerStatus(true);
+		winform.msgbox("上传成功");
+	}
+	elseif(result[["code"]] == 1) {
+		setStatus('\uF058', '记录已存在', 0xB8860B);
+		setServerStatus(true);
+		winform.msgbox("记录已存在，无需重复上传");
+	}
+	else {
+		setStatus('\uF057', '上传失败', 0x0000CC);
+		winform.msgbox(result[["msg"]] || "上传失败");
+	}
+};
 
 
 winform.btnEditInfo.oncommand = function(id, event){
