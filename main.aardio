@@ -137,8 +137,8 @@ if(!cfg.used || cfg.used == "") {
 
 var defaultServerUrls = hwinfo.config.defaultUrls;
 
-var serverNotifier = thread.command(winform);
-serverNotifier.onFound = function(url){
+var notifier = thread.command(winform);
+notifier.onFound = function(url){
 	if(cfg.activeUrl && cfg.activeUrl != "") return;
 	cfg.activeUrl = url;
 	var alreadyIn = false;
@@ -156,10 +156,40 @@ serverNotifier.onFound = function(url){
 	var shortUrl = ..string.match(url, "://([^/]+)") || url;
 	setStatus('\uF058', '已连接 ' ++ shortUrl, 0x008800);
 };
-serverNotifier.onTimeout = function(){
+notifier.onTimeout = function(){
 	if(!cfg.activeUrl || cfg.activeUrl == "") {
 		setServerStatus(false);
 		setStatus('\uF057', '服务器未连接', 0x999999);
+	}
+};
+
+notifier.onCollectDone = function(data){
+	winform.btnRefresh.disabled = false;
+	updateUI(data, null);
+	if(!data) {
+		setStatus('\uF057', '采集失败', 0x0000CC);
+	}
+	else {
+		setStatus('\uF058', '采集完成 — ' ++ (data.hostname || ""), 0x0B86B8);
+	}
+};
+
+notifier.onUploadDone = function(result){
+	winform.btnUpload.disabled = false;
+	winform.btnUpload.text = "上传信息";
+	if(result[["code"]] == 0) {
+		setStatus('\uF058', '上传成功', 0x008800);
+		setServerStatus(true);
+		winform.msgbox("上传成功");
+	}
+	elseif(result[["code"]] == 1) {
+		setStatus('\uF058', '记录已存在', 0xB8860B);
+		setServerStatus(true);
+		winform.msgbox("记录已存在，无需重复上传");
+	}
+	else {
+		setStatus('\uF057', '上传失败', 0x0000CC);
+		winform.msgbox(result[["msg"]] || "上传失败");
 	}
 };
 
@@ -313,6 +343,7 @@ var updateUI = function(data, err){
 
 var doCollect = function(){
 	setStatus('\uF110', '采集中...', 0xB8860B);
+	winform.btnRefresh.disabled = true;
 	winform.txtHostname.text = "采集中...";
 	winform.txtOsver.text = "";
 	winform.txtPcId.text = "";
@@ -326,21 +357,16 @@ var doCollect = function(){
 	winform.txtMemory.text = "";
 	winform.txtDisk.text = "";
 	
-	var data, err;
-	try {
-		data = hwinfo.collect.all();
-	}
-	catch(e) {
-		err = e;
-	}
-	updateUI(data, err);
-	if(err) {
-		setStatus('\uF057', '采集失败', 0x0000CC);
-	}
-	else {
-		setStatus('\uF058', '采集完成 — ' ++ (data && data.hostname || ""), 0x0B86B8);
-	}
+	..thread.invoke(
+		function(hwnd){
+			import hwinfo.collect;
+			import thread.command;
+			var data = hwinfo.collect.all();
+			thread.command.send(hwnd, "onCollectDone", data);
+		}, winform.hwnd
+	);
 }
+
 
 winform.btnEditInfo.oncommand = function(id, event){
 	var info = hwinfo.namedlg.show(winform, cfg.used, cfg.unit, cfg.dept);
@@ -423,6 +449,16 @@ winform.btnUpload.oncommand = function(id, event){
 		return;
 	}
 	
+	var uploadUrl = cfg.activeUrl;
+	if(!uploadUrl || uploadUrl == "") {
+		uploadUrl = cfg.serverUrls[1] || "";
+	}
+	if(!uploadUrl || uploadUrl == "") {
+		setStatus('\uF057', '未配置服务器地址', 0x999999);
+		winform.msgbox("未配置服务器地址，请先设置服务器");
+		return;
+	}
+	
 	winform.btnUpload.disabled = true;
 	winform.btnUpload.text = "上传中...";
 	setStatus('\uF110', '上传中...', 0xB8860B);
@@ -431,37 +467,17 @@ winform.btnUpload.oncommand = function(id, event){
 	hwData.used = cfg.used;
 	hwData.unit = cfg.unit;
 	hwData.dept = cfg.dept;
-
-
-	var uploadUrl = cfg.activeUrl;
-	if(!uploadUrl || uploadUrl == "") {
-		uploadUrl = cfg.serverUrls[1] || "";
-	}
-	if(!uploadUrl || uploadUrl == "") {
-		winform.btnUpload.disabled = false;
-		winform.btnUpload.text = "上传信息";
-		setStatus('\uF057', '未配置服务器地址', 0x999999);
-		winform.msgbox("未配置服务器地址，请先设置服务器");
-		return;
-	}
-	var result = hwinfo.upload.send(hwData, uploadUrl);
+	var url = uploadUrl;
+	var hwnd = winform.hwnd;
 	
-	winform.btnUpload.disabled = false;
-	winform.btnUpload.text = "上传信息";
-	if(result[["code"]] == 0) {
-		setStatus('\uF058', '上传成功', 0x008800);
-		setServerStatus(true);
-		winform.msgbox("上传成功");
-	}
-	elseif(result[["code"]] == 1) {
-		setStatus('\uF058', '记录已存在', 0xB8860B);
-		setServerStatus(true);
-		winform.msgbox("记录已存在，无需重复上传");
-	}
-	else {
-		setStatus('\uF057', '上传失败', 0x0000CC);
-		winform.msgbox(result[["msg"]] || "上传失败");
-	}
+	..thread.invoke(
+		function(hwData, url, hwnd){
+			import hwinfo.upload;
+			import thread.command;
+			var result = hwinfo.upload.send(hwData, url);
+			thread.command.send(hwnd, "onUploadDone", result);
+		}, hwData, url, hwnd
+	);
 }
 
 winform.btnExit.oncommand = function(id, event){
