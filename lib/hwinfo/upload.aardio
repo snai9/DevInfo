@@ -3,14 +3,16 @@ import JSON;
 
 namespace hwinfo.upload;
 
-send = function(data, serverUrl){
+send = function(data, serverUrl, token){
 	var http = ..inet.http("hwinfo-client", false);
 	http.setTimeouts(10000, 10000, 10000);
 	
 	var jsonStr = ..JSON.stringify(data);
+	var headers = "Content-Type: application/json\r\n";
+	if(token && token != "") headers = headers ++ "X-Token: " ++ token ++ "\r\n";
 	var result;
 	try {
-		result = http.post(serverUrl ++ "/api/upload", jsonStr, "Content-Type: application/json\r\n");
+		result = http.post(serverUrl ++ "/api/upload", jsonStr, headers);
 	}
 	catch(e) {
 		http.close();

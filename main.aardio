@@ -138,9 +138,10 @@ if(!cfg.used || cfg.used == "") {
 var defaultServerUrls = hwinfo.config.defaultUrls;
 
 var notifier = thread.command(winform);
-notifier.onFound = function(url){
+notifier.onFound = function(url, token){
 	if(cfg.activeUrl && cfg.activeUrl != "") return;
 	cfg.activeUrl = url;
+	cfg.authToken = token || "";
 	var alreadyIn = false;
 	if(cfg.serverUrls && #cfg.serverUrls > 0) {
 		for i = 1; #cfg.serverUrls {
@@ -229,9 +230,15 @@ var checkServer = function(){
 				http.setTimeouts(3000, 3000, 3000);
 				var result = http.post(url ++ "/api/ping", "{}", "Content-Type: application/json\r\n");
 				var statusCode = http.statusCode;
+				var token = "";
+				if(statusCode && statusCode >= 200 && statusCode < 300 && type(result) == "string") {
+					import JSON;
+					var resp = JSON.tryParse(result);
+					if(resp && resp[["token"]]) token = resp[["token"]];
+				}
 				http.close();
 				if(statusCode && statusCode >= 200 && statusCode < 300) {
-					thread.command.send(hwnd, "onFound", url);
+					thread.command.send(hwnd, "onFound", url, token);
 				}
 			}, urlList[i], hwnd
 		);
@@ -468,15 +475,16 @@ winform.btnUpload.oncommand = function(id, event){
 	hwData.unit = cfg.unit;
 	hwData.dept = cfg.dept;
 	var url = uploadUrl;
+	var token = cfg.authToken || "";
 	var hwnd = winform.hwnd;
 	
 	..thread.invoke(
-		function(hwData, url, hwnd){
+		function(hwData, url, token, hwnd){
 			import hwinfo.upload;
 			import thread.command;
-			var result = hwinfo.upload.send(hwData, url);
+			var result = hwinfo.upload.send(hwData, url, token);
 			thread.command.send(hwnd, "onUploadDone", result);
-		}, hwData, url, hwnd
+		}, hwData, url, token, hwnd
 	);
 }
 

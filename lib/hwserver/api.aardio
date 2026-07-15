@@ -1,6 +1,8 @@
 import wsock.tcp.simpleHttpServer;
 import thread.command;
 import io;
+import string;
+import crypt;
 
 namespace hwserver.api;
 
@@ -9,12 +11,25 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 	if(!port) port = 8080;
 	if(!_dbPath) _dbPath = ..io.appData("hwinfo/hwinfo.db");
 	
+	var authToken = ..crypt.md5(..string.random(32), false);
+	
 	var serverMain = ..wsock.tcp.simpleHttpServer.mainThread(
 		function(response, request, session){
 			response.contentType = "application/json";
 			
 			if(request.pathInfo == "/api/ping") {
-				response.write({code=0; msg="pong"});
+				response.write({code=0; msg="pong"; token=authToken});
+				return;
+			}
+			
+			var reqToken = request.getHeader("X-Token") || "";
+			if(!reqToken) {
+				var m = ..string.match(request.url, "token=([^&]+)");
+				if(m) reqToken = m;
+			}
+			if(reqToken != authToken) {
+				response.status = "403 Forbidden";
+				response.write({code=-1; msg="认证失败"});
 				return;
 			}
 			
@@ -82,7 +97,7 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 		}
 	);
 	
-	serverMain.threadGlobal = { dbPath = _dbPath; notifierHwnd = _notifierHwnd };
+	serverMain.threadGlobal = { dbPath = _dbPath; notifierHwnd = _notifierHwnd; authToken = authToken };
 	serverMain.threadNum = 4;
 	var ok, errMsg = serverMain.start(ip, port);
 	
