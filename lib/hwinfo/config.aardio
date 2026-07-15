@@ -27,7 +27,7 @@ load = function(){
 		}
 	}
 	if(!cfg.activeUrl) cfg.activeUrl = cfg.serverUrls[1] || "";
-	if(!cfg.authToken) cfg.authToken = "";
+
 	return cfg;
 }
 

@@ -3,6 +3,7 @@ import win.dlg.message;
 import hwserver.api;
 import hwserver.db;
 import hwserver.data;
+import hwserver.log;
 import sqlite;
 import godking.vlistEx;
 import thread.command;
@@ -15,8 +16,9 @@ var winform = win.form(text="硬件信息管理 — 服务端";right=959;bottom=
 winform.add(
 btnDelete={cls="plus";text="删除选中";left=140;top=524;right=260;bottom=552;db=1;dl=1;z=9};
 btnEdit={cls="plus";text="编辑选中";left=20;top=524;right=132;bottom=552;bgcolor=0xE0F0F8;db=1;dl=1;z=8};
-btnExport={cls="plus";text="导出CSV";left=720;top=524;right=828;bottom=552;db=1;dr=1;z=11};
-btnRefresh={cls="plus";text="刷新记录";left=836;top=524;right=944;bottom=552;db=1;dr=1;z=10};
+	btnExport={cls="plus";text="导出";left=720;top=524;right=828;bottom=552;db=1;dr=1;z=11};
+	btnLog={cls="plus";text="操作日志";left=610;top=524;right=710;bottom=552;db=1;dr=1;z=17};
+	btnRefresh={cls="plus";text="刷新记录";left=836;top=524;right=944;bottom=552;db=1;dr=1;z=10};
 btnStart={cls="plus";text="启动服务";left=196;top=10;right=300;bottom=38;bgcolor=0xE0F0F8;dl=1;dt=1;z=5};
 btnStop={cls="plus";text="停止服务";left=308;top=10;right=412;bottom=38;bgcolor=0xE0F0F8;disabled=1;dl=1;dt=1;z=6};
 cmbUnit={cls="combobox";left=24;top=48;right=200;bottom=72;color=0x666666;dl=1;dt=1;edge=1;items={"全部"};mode="";z=12};
@@ -109,6 +111,10 @@ var applySkin = function(){
 	})
 	winform.btnSearch.skin({
 		background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+		color = {default=0xFFFFFFFF; disabled=0xFF888888}
+	})
+	winform.btnLog.skin({
+		background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4; disabled=0xFFCCCCCC};
 		color = {default=0xFFFFFFFF; disabled=0xFF888888}
 	})
 }
@@ -268,50 +274,50 @@ var showEditDialog = function(row){
 		bgcolor=0xE0F0F8; right=599; bottom=659; center=1; mode="popup"
 	)
 	dlg.add(
-		lbl={cls="static"; text="使用人："; left=16; top=16; right=110; bottom=36; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editUsed={cls="edit"; left=116; top=14; right=580; bottom=38; color=0x666666; font=LOGFONT(h=-13)};
+		lbl={cls="static"; text="使用人："; left=16; top=16; right=130; bottom=36; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editUsed={cls="edit"; left=136; top=14; right=580; bottom=38; color=0x666666; font=LOGFONT(h=-13)};
 		
-		lblU={cls="static"; text="单位："; left=16; top=50; right=110; bottom=70; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editUnit={cls="edit"; left=116; top=48; right=580; bottom=72;  color=0x666666; font=LOGFONT(h=-13)};
+		lblU={cls="static"; text="单位："; left=16; top=50; right=130; bottom=70; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editUnit={cls="edit"; left=136; top=48; right=580; bottom=72;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lblD={cls="static"; text="部门及位置："; left=16; top=84; right=110; bottom=104; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editDept={cls="edit"; left=116; top=82; right=580; bottom=106; color=0x666666; font=LOGFONT(h=-13)};
+		lblD={cls="static"; text="部门及位置："; left=16; top=84; right=130; bottom=104; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editDept={cls="edit"; left=136; top=82; right=580; bottom=106; color=0x666666; font=LOGFONT(h=-13)};
 		
-		lblP={cls="static"; text="计算机编号："; left=16; top=118; right=110; bottom=138; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editPcId={cls="edit"; left=116; top=116; right=580; bottom=140;  color=0x666666; font=LOGFONT(h=-13)};
+		lblP={cls="static"; text="计算机编号："; left=16; top=118; right=130; bottom=138; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editPcId={cls="edit"; left=136; top=116; right=580; bottom=140;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lbl2={cls="static"; text="计算机名："; left=16; top=152; right=110; bottom=172; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editHostname={cls="edit"; left=116; top=150; right=580; bottom=174;  color=0x666666; font=LOGFONT(h=-13)};
+		lbl2={cls="static"; text="计算机名："; left=16; top=152; right=130; bottom=172; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editHostname={cls="edit"; left=136; top=150; right=580; bottom=174;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lbl3={cls="static"; text="IP地址："; left=16; top=186; right=110; bottom=206; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editIps={cls="edit"; left=116; top=184; right=580; bottom=208;  color=0x666666; font=LOGFONT(h=-13)};
+		lbl3={cls="static"; text="IP地址："; left=16; top=186; right=130; bottom=206; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editIps={cls="edit"; left=136; top=184; right=580; bottom=208;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lbl4={cls="static"; text="MAC地址："; left=16; top=220; right=110; bottom=240; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editMacs={cls="edit"; left=116; top=218; right=580; bottom=242; color=0x666666; font=LOGFONT(h=-13)};
+		lbl4={cls="static"; text="MAC地址："; left=16; top=220; right=130; bottom=240; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editMacs={cls="edit"; left=136; top=218; right=580; bottom=242; color=0x666666; font=LOGFONT(h=-13)};
 		
-		lbl5={cls="static"; text="操作系统："; left=16; top=254; right=110; bottom=274; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editOsver={cls="edit"; left=116; top=252; right=580; bottom=276;  color=0x666666; font=LOGFONT(h=-13)};
+		lbl5={cls="static"; text="操作系统："; left=16; top=254; right=130; bottom=274; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editOsver={cls="edit"; left=136; top=252; right=580; bottom=276;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lblB={cls="static"; text="计算机品牌："; left=16; top=288; right=110; bottom=308; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editPcBrand={cls="edit"; left=116; top=286; right=580; bottom=310;  color=0x666666; font=LOGFONT(h=-13)};
+		lblB={cls="static"; text="计算机品牌："; left=16; top=288; right=130; bottom=308; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editPcBrand={cls="edit"; left=136; top=286; right=580; bottom=310;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lbl6={cls="static"; text="办公软件："; left=16; top=322; right=110; bottom=342; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editOffice={cls="edit"; left=116; top=320; right=580; bottom=344;  color=0x666666; font=LOGFONT(h=-13)};
+		lbl6={cls="static"; text="办公软件："; left=16; top=322; right=130; bottom=342; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editOffice={cls="edit"; left=136; top=320; right=580; bottom=344;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lblOD={cls="static"; text="办公软件日期："; left=16; top=356; right=110; bottom=376; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editOfficeDate={cls="edit"; left=116; top=354; right=580; bottom=378;  color=0x666666; font=LOGFONT(h=-13)};
+		lblOD={cls="static"; text="办公软件日期："; left=16; top=356; right=130; bottom=376; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editOfficeDate={cls="edit"; left=136; top=354; right=580; bottom=378;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lbl7={cls="static"; text="杀毒软件："; left=16; top=390; right=110; bottom=410; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editAntivirus={cls="edit"; left=116; top=388; right=580; bottom=412; color=0x666666; font=LOGFONT(h=-13)};
+		lbl7={cls="static"; text="杀毒软件："; left=16; top=390; right=130; bottom=410; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editAntivirus={cls="edit"; left=136; top=388; right=580; bottom=412; color=0x666666; font=LOGFONT(h=-13)};
 		
-		lblAD={cls="static"; text="杀毒软件日期："; left=16; top=424; right=110; bottom=444; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editAvDate={cls="edit"; left=116; top=422; right=580; bottom=446;  color=0x666666; font=LOGFONT(h=-13)};
+		lblAD={cls="static"; text="杀毒软件日期："; left=16; top=424; right=130; bottom=444; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editAvDate={cls="edit"; left=136; top=422; right=580; bottom=446;  color=0x666666; font=LOGFONT(h=-13)};
 		
-		lbl8={cls="static"; text="内存："; left=16; top=458; right=110; bottom=478; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editMemories={cls="edit"; left=116; top=454; right=580; bottom=514; color=0x666666; multiline=1; vscroll=1; font=LOGFONT(h=-12)};
+		lbl8={cls="static"; text="内存："; left=16; top=458; right=130; bottom=478; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editMemories={cls="edit"; left=136; top=454; right=580; bottom=514; color=0x666666; multiline=1; vscroll=1; font=LOGFONT(h=-12)};
 		
-		lbl9={cls="static"; text="硬盘："; left=16; top=522; right=110; bottom=542; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		editDisks={cls="edit"; left=116; top=518; right=580; bottom=578; color=0x666666; multiline=1; vscroll=1; font=LOGFONT(h=-12)};
+		lbl9={cls="static"; text="硬盘："; left=16; top=522; right=130; bottom=542; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editDisks={cls="edit"; left=136; top=518; right=580; bottom=578; color=0x666666; multiline=1; vscroll=1; font=LOGFONT(h=-12)};
 		
 		btnOk={cls="plus"; text="保存"; left=200; top=594; right=300; bottom=624; z=90};
 		btnCancel={cls="plus"; text="取消"; left=320; top=594; right=420; bottom=624; z=91}
@@ -425,6 +431,40 @@ winform.btnDelete.oncommand = function(id, event){
 	loadRecords(unit, ..string.trim(winform.editSearch.text));
 }
 
+winform.btnLog.oncommand = function(id, event){
+	var dlg = ..win.form(
+		text="操作日志"; parent=winform; border="dialog window";
+		bgcolor=0xE0F0F8; right=799; bottom=559; center=1; mode="popup"
+	)
+	dlg.add(
+		editLog={cls="edit"; left=12; top=12; right=788; bottom=480; bgcolor=0xFFFFFF; color=0x333333; font=LOGFONT(h=-12;name="Consolas"); multiline=1; readonly=1; vscroll=1; hscroll=1; z=1};
+		btnClearLog={cls="plus"; text="清空日志"; left=300; top=500; right=400; bottom=530; z=2};
+		btnCloseLog={cls="plus"; text="关闭"; left=420; top=500; right=500; bottom=530; z=3}
+	)
+	dlg.editLog.text = hwserver.log.readRecent(500);
+	dlg.editLog.setSel(-1, -1);
+	
+	dlg.btnClearLog.skin({
+		background = {default=0xFFCC4444; hover=0xFFDD5555; active=0xFFAA2222};
+		color = {default=0xFFFFFFFF}
+	})
+	dlg.btnCloseLog.skin({
+		background = {default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777};
+		color = {default=0xFFFFFFFF}
+	})
+	
+	dlg.btnClearLog.oncommand = function(id, event){
+		if(dlg.msgboxTest("确定清空所有操作日志？", "确认")) {
+			hwserver.log.clear();
+			dlg.editLog.text = "";
+		}
+	}
+	dlg.btnCloseLog.oncommand = function(id, event){
+		dlg.close();
+	}
+	dlg.doModal();
+}
+
 winform.btnExport.oncommand = function(id, event){
 	var db = sqlite(dbPath);
 	if(!db) {
@@ -438,32 +478,109 @@ winform.btnExport.oncommand = function(id, event){
 		return;
 	}
 	
-	var path = fsys.dlg.save("CSV文件|*.csv", "导出硬件信息",, winform);
-	if(!path) return;
-	
 	var headers = {"ID";"使用人";"单位";"部门及位置";"计算机编号";"计算机名";"IP地址";"MAC地址";"操作系统";"计算机品牌";"办公软件";"办公软件日期";"杀毒软件";"杀毒软件日期";"内存";"硬盘";"上传时间"};
 	var keys = {"id";"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"officeDate";"antivirus";"avDate";"memories";"disks";"uploadTime"};
 	
-	var lines = {};
-	var headerLine = {};
-	for h = 1; #headers {
-		table.push(headerLine, '"' ++ string.replace(headers[h], '"', '""') ++ '"');
-	}
-	table.push(lines, string.join(headerLine, ","));
+	var choiceDlg = ..win.form(
+		text="选择导出格式"; parent=winform; border="dialog window";
+		bgcolor=0xE0F0F8; right=319; bottom=159; center=1; mode="popup"
+	)
+	choiceDlg.add(
+		lbl={cls="static"; text="请选择导出格式："; left=16; top=16; right=300; bottom=36; bgcolor=0xE0F0F8; color=0x0B86B8; font=LOGFONT(h=-14)};
+		btnCsv={cls="plus"; text="导出 CSV"; left=20; top=50; right=150; bottom=82; z=1};
+		btnExcel={cls="plus"; text="导出 Excel"; left=170; top=50; right=300; bottom=82; z=2};
+		btnCancelExp={cls="plus"; text="取消"; left=110; top=100; right=210; bottom=130; z=3}
+	)
+	choiceDlg.btnCsv.skin({
+		background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4};
+		color = {default=0xFFFFFFFF}
+	})
+	choiceDlg.btnExcel.skin({
+		background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4};
+		color = {default=0xFFFFFFFF}
+	})
+	choiceDlg.btnCancelExp.skin({
+		background = {default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777};
+		color = {default=0xFFFFFFFF}
+	})
 	
-	for i = 1; #rows {
-		var line = {};
-		for k = 1; #keys {
-			var val = tostring(rows[i][[keys[k]]] || "");
-			table.push(line, '"' ++ string.replace(val, '"', '""') ++ '"');
+	var doExportCsv = function(){
+		var path = fsys.dlg.save("CSV文件|*.csv", "导出硬件信息",, winform);
+		if(!path) return;
+		
+		var lines = {};
+		var headerLine = {};
+		for h = 1; #headers {
+			table.push(headerLine, '"' ++ string.replace(headers[h], '"', '""') ++ '"');
 		}
-		table.push(lines, string.join(line, ","));
+		table.push(lines, string.join(headerLine, ","));
+		
+		for i = 1; #rows {
+			var line = {};
+			for k = 1; #keys {
+				var val = tostring(rows[i][[keys[k]]] || "");
+				table.push(line, '"' ++ string.replace(val, '"', '""') ++ '"');
+			}
+			table.push(lines, string.join(line, ","));
+		}
+		
+		var content = string.join(lines, '\r\n');
+		var BOM = '\xEF\xBB\xBF';
+		string.save(path, BOM ++ content);
+		choiceDlg.close();
+		winform.msgbox("导出成功！\n" ++ path);
 	}
 	
-	var content = string.join(lines, '\r\n');
-	var BOM = '\xEF\xBB\xBF';
-	string.save(path, BOM ++ content);
-	winform.msgbox("导出成功！\n" ++ path);
+	var doExportExcel = function(){
+		import com.excel;
+		var excel = com.excel(true);
+		if(!excel) {
+			choiceDlg.close();
+			winform.msgbox("请先安装 Excel 或 WPS");
+			return;
+		}
+		excel.alerts = false;
+		excel.oExcel.WorkBooks.Add();
+		var sheet = excel.oExcel.ActiveWorkbook.Sheets(1);
+		
+		for h = 1; #headers {
+			sheet.Cells(1, h).Value2 = headers[h];
+		}
+		var headerRange = sheet.Range(sheet.Cells(1, 1), sheet.Cells(1, #headers));
+		headerRange.Font.Bold = true;
+		headerRange.Interior.Color = 0xF0F8FF;
+		
+		for i = 1; #rows {
+			for k = 1; #keys {
+				sheet.Cells(i + 1, k).Value2 = tostring(rows[i][[keys[k]]] || "");
+			}
+		}
+		
+		sheet.UsedRange.Columns.AutoFit();
+		
+		var path = fsys.dlg.save("Excel文件|*.xlsx", "导出硬件信息",, winform);
+		if(!path) {
+			excel.Quit();
+			choiceDlg.close();
+			return;
+		}
+		
+		excel.SaveAs(path, 51);
+		excel.Quit();
+		choiceDlg.close();
+		winform.msgbox("导出成功！\n" ++ path);
+	}
+	
+	choiceDlg.btnCsv.oncommand = function(id, event){
+		doExportCsv();
+	}
+	choiceDlg.btnExcel.oncommand = function(id, event){
+		doExportExcel();
+	}
+	choiceDlg.btnCancelExp.oncommand = function(id, event){
+		choiceDlg.close();
+	}
+	choiceDlg.doModal();
 }
 
 loadRecords(null, "");

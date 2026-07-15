@@ -1,0 +1,50 @@
+import io;
+import string;
+import time;
+
+namespace hwserver.log;
+
+var logPath = ..io.appData("hwinfo/server.log");
+
+write = function(level, action, detail){
+	var now = ..time();
+	var ts = ..string.format("%04d-%02d-%02d %02d:%02d:%02d",
+		now.year, now.month, now.day, now.hour, now.minute, now.second);
+	var line = "[" ++ ts ++ "] [" ++ level ++ "] " ++ action;
+	if(detail && detail != "") line = line ++ " — " ++ detail;
+	line = line ++ '\r\n';
+	..string.save(logPath, line, true);
+}
+
+info = function(action, detail){
+	write("INFO", action, detail || "");
+}
+
+warn = function(action, detail){
+	write("WARN", action, detail || "");
+}
+
+err = function(action, detail){
+	write("ERROR", action, detail || "");
+}
+
+readRecent = function(maxLines){
+	maxLines = maxLines || 200;
+	var str = ..string.load(logPath);
+	if(!str || str == "") return "";
+	var lines = ..string.split(str, '\n');
+	var total = #lines;
+	if(total <= maxLines) return str;
+	var start = total - maxLines + 1;
+	var recent = {};
+	for i = start; total {
+		if(lines[i] && ..string.trim(lines[i]) != "") {
+			..table.push(recent, lines[i]);
+		}
+	}
+	return ..string.join(recent, '\n');
+}
+
+clear = function(){
+	..string.save(logPath, "");
+}

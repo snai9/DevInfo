@@ -3,13 +3,12 @@ import JSON;
 
 namespace hwinfo.upload;
 
-send = function(data, serverUrl, token){
+send = function(data, serverUrl){
 	var http = ..inet.http("hwinfo-client", false);
 	http.setTimeouts(10000, 10000, 10000);
 	
 	var jsonStr = ..JSON.stringify(data);
 	var headers = "Content-Type: application/json\r\n";
-	if(token && token != "") headers = headers ++ "X-Token: " ++ token ++ "\r\n";
 	var result;
 	try {
 		result = http.post(serverUrl ++ "/api/upload", jsonStr, headers);
@@ -52,4 +51,20 @@ send = function(data, serverUrl, token){
 	if(!resp) return {code=-1; msg="服务器响应格式错误"};
 	
 	return resp;
+}
+
+ping = function(serverUrl){
+	var http = ..inet.http("hwinfo-ping", false);
+	http.setTimeouts(5000, 5000, 5000);
+	var result;
+	try {
+		result = http.post(serverUrl ++ "/api/ping", "{}", "Content-Type: application/json\r\n");
+	}
+	catch(e) {
+		http.close();
+		return false;
+	}
+	var statusCode = http.statusCode;
+	http.close();
+	return statusCode && statusCode >= 200 && statusCode < 300;
 }

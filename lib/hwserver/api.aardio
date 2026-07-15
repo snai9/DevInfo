@@ -2,7 +2,6 @@ import wsock.tcp.simpleHttpServer;
 import thread.command;
 import io;
 import string;
-import crypt;
 
 namespace hwserver.api;
 
@@ -11,25 +10,12 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 	if(!port) port = 8080;
 	if(!_dbPath) _dbPath = ..io.appData("hwinfo/hwinfo.db");
 	
-	var authToken = ..crypt.md5(..string.random(32), false);
-	
 	var serverMain = ..wsock.tcp.simpleHttpServer.mainThread(
 		function(response, request, session){
 			response.contentType = "application/json";
 			
 			if(request.pathInfo == "/api/ping") {
-				response.write({code=0; msg="pong"; token=authToken});
-				return;
-			}
-			
-			var reqToken = request.getHeader("X-Token") || "";
-			if(!reqToken) {
-				var m = ..string.match(request.url, "token=([^&]+)");
-				if(m) reqToken = m;
-			}
-			if(reqToken != authToken) {
-				response.status = "403 Forbidden";
-				response.write({code=-1; msg="认证失败"});
+				response.write({code=0; msg="pong"});
 				return;
 			}
 			
@@ -43,6 +29,7 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 				
 				import sqlite;
 				import hwserver.data;
+				import hwserver.log;
 				import string;
 				import thread.command;
 				
@@ -50,6 +37,7 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 				if(!db) {
 					response.status = "500 Internal Server Error";
 					response.write({code=-1; msg="数据库打开失败"});
+					hwserver.log.err("上传失败", "数据库打开失败");
 					return;
 				}
 				
@@ -60,11 +48,20 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 					thread.command.post(notifierHwnd, "onUpload");
 				}
 				
-				if(result[["code"]] == -1 && string.find(result[["msg"]], "校验失败")) {
-					response.status = "400 Bad Request";
+				if(result[["code"]] == 0) {
+					hwserver.log.info("上传成功", "使用人=" ++ (data[["used"]] || "") ++ " 单位=" ++ (data[["unit"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
 				}
-				elseif(result[["code"]] == -1) {
-					response.status = "500 Internal Server Error";
+				elseif(result[["code"]] == 1) {
+					hwserver.log.info("记录已存在", "使用人=" ++ (data[["used"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
+				}
+				else {
+					if(..string.find(result[["msg"]], "校验失败")) {
+						response.status = "400 Bad Request";
+					}
+					else {
+						response.status = "500 Internal Server Error";
+					}
+					hwserver.log.err("上传失败", result[["msg"]] || "未知错误");
 				}
 				response.write(result);
 				return;
@@ -73,12 +70,14 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 			if(request.pathInfo == "/api/records" && request.method == "GET") {
 				import sqlite;
 				import hwserver.data;
+				import hwserver.log;
 				import string;
 				
 				var db = sqlite(dbPath);
 				if(!db) {
 					response.status = "500 Internal Server Error";
 					response.write({code=-1; msg="数据库连接失败"});
+					hwserver.log.err("查询失败", "数据库连接失败");
 					return;
 				}
 				
@@ -88,6 +87,7 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 				
 				var result = hwserver.data.queryAll(db, unit);
 				db.close();
+				hwserver.log.info("查询记录", "单位=" ++ (unit || "全部"));
 				response.write(result);
 				return;
 			}
@@ -97,9 +97,17 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 		}
 	);
 	
-	serverMain.threadGlobal = { dbPath = _dbPath; notifierHwnd = _notifierHwnd; authToken = authToken };
+	serverMain.threadGlobal = { dbPath = _dbPath; notifierHwnd = _notifierHwnd };
 	serverMain.threadNum = 4;
 	var ok, errMsg = serverMain.start(ip, port);
+	
+	import hwserver.log;
+	if(ok) {
+		hwserver.log.info("服务启动", "端口=" .. tostring(port));
+	}
+	else {
+		hwserver.log.err("服务启动失败", errMsg || "未知错误");
+	}
 	
 	if(onStatus) {
 		if(ok) onStatus(true, "服务已启动：" ++ serverMain.getUrl());

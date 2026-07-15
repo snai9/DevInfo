@@ -13,7 +13,9 @@ network = function(){
 	import com.wmi;
 	var ips = {};
 	var macs = {};
-	for props, i in ..com.wmi.eachProperties("Win32_NetworkAdapterConfiguration") {
+	var iter = ..com.wmi.eachProperties("Win32_NetworkAdapterConfiguration");
+	if(!iter) return {ips={"未获取"}; macs={"未获取"}};
+	for props, i in iter {
 		if(props[["IPEnabled"]]) {
 			var ipList = props[["IPAddress"]];
 			if(..type(ipList) == "table") {
@@ -334,21 +336,13 @@ software = function(){
 	var getLocationDate = function(path){
 		if(!path || #path == 0) return "";
 		if(!..io.exist(path)) return "";
-		var result = "";
-		try {
-			var info = ..fsys.info(path);
-			if(info && info.creationTime) {
-				var ft = ..fsys.time(info.creationTime);
-				if(ft) {
-					var st = ft.local(true).toSystemTime();
-					if(st && st.year && ..tonumber(st.year) > 2000) {
-						result = ..string.format("%04d-%02d-%02d", ..tonumber(st.year), ..tonumber(st.month), ..tonumber(st.day));
-					}
-				}
-			}
-		}
-		catch(e) {}
-		return result;
+		var info = ..fsys.info(path);
+		if(!info || !info.creationTime) return "";
+		var ft = ..fsys.time(info.creationTime);
+		if(!ft) return "";
+		var st = ft.local(true).toSystemTime();
+		if(!st || !st.year || ..tonumber(st.year) < 2000) return "";
+		return ..string.format("%04d-%02d-%02d", ..tonumber(st.year), ..tonumber(st.month), ..tonumber(st.day));
 	};
 
 	// 收集所有候选日期，取最早的（升级会改 InstallDate 和部分文件，但目录创建时间通常最早且最可靠）
@@ -415,9 +409,11 @@ software = function(){
 	}
 
 	// WMI 补充杀软（无日期）
-	try {
+	do {
 		import com.wmi;
-		for props, i in ..com.wmi.eachProperties("AntiVirusProduct", "root\SecurityCenter2") {
+		var iter = ..com.wmi.eachProperties("AntiVirusProduct", "root\SecurityCenter2");
+		if(!iter) break;
+		for props, i in iter {
 			var displayName = props[["displayName"]];
 			if(!displayName || displayName == "") continue;
 			var exists = false;
@@ -431,9 +427,7 @@ software = function(){
 				..table.push(avRecords, {name = displayName; installDate = ""; keyWriteTime = null; installLocation = ""});
 			}
 		}
-	}
-	catch(e) {
-	}
+	} while(false)
 
 	var nameWithVersion = function(rec){
 		if(rec.version && rec.version != "") return rec.name ++ " " ++ rec.version;
@@ -476,7 +470,9 @@ software = function(){
 memory = function(){
 	import com.wmi;
 	var memories = {};
-	for props, i in ..com.wmi.eachProperties("Win32_PhysicalMemory") {
+	var iter = ..com.wmi.eachProperties("Win32_PhysicalMemory");
+	if(!iter) return {{model="未获取"; size="未获取"}};
+	for props, i in iter {
 		var manufacturer = props[["Manufacturer"]] || "未知";
 		var capacity = ..tonumber(props[["Capacity"]]) || 0;
 		var speed = props[["Speed"]] || "";
@@ -493,7 +489,9 @@ memory = function(){
 disk = function(){
 	import com.wmi;
 	var disks = {};
-	for props, i in ..com.wmi.eachProperties("Win32_DiskDrive") {
+	var iter = ..com.wmi.eachProperties("Win32_DiskDrive");
+	if(!iter) return {{model="未获取"; size="未获取"; serial="未获取"}};
+	for props, i in iter {
 		var model = props[["Model"]] || "未知";
 		var size = ..tonumber(props[["Size"]]) || 0;
 		var serial = props[["SerialNumber"]] || "未获取";
@@ -522,47 +520,24 @@ all = function(){
 	
 	var result = {};
 	
-	try { result.hostname = hostname(); }
-	catch(e) { result.hostname = "未获取"; }
+	result.hostname = hostname();
 	
-	try {
-		var net = network();
-		result.ips = net.ips;
-		result.macs = net.macs;
-	}
-	catch(e) {
-		result.ips = {"未获取"};
-		result.macs = {"未获取"};
-	}
+	var net = network();
+	result.ips = net ? net.ips : {"未获取"};
+	result.macs = net ? net.macs : {"未获取"};
 	
-	try { result.osver = osver(); }
-	catch(e) { result.osver = "未获取"; }
+	result.osver = osver();
+	result.pcId = pcId();
+	result.pcBrand = brand();
 	
-	try { result.pcId = pcId(); }
-	catch(e) { result.pcId = "未获取"; }
+	var sw = software();
+	result.office = sw ? sw.office : "未获取";
+	result.officeDate = sw ? sw.officeDate : "未获取";
+	result.antivirus = sw ? sw.antivirus : "未获取";
+	result.avDate = sw ? sw.avDate : "未获取";
 	
-	try { result.pcBrand = brand(); }
-	catch(e) { result.pcBrand = "未获取"; }
-	
-	try {
-		var sw = software();
-		result.office = sw.office;
-		result.officeDate = sw.officeDate;
-		result.antivirus = sw.antivirus;
-		result.avDate = sw.avDate;
-	}
-	catch(e) {
-		result.office = "未获取";
-		result.officeDate = "未获取";
-		result.antivirus = "未获取";
-		result.avDate = "未获取";
-	}
-	
-	try { result.memories = memory(); }
-	catch(e) { result.memories = {{model="未获取"; size="未获取"}}; }
-	
-	try { result.disks = disk(); }
-	catch(e) { result.disks = {{model="未获取"; size="未获取"; serial="未获取"}}; }
+	result.memories = memory();
+	result.disks = disk();
 	
 	return result;
 }
