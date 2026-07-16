@@ -336,6 +336,7 @@ var doCollect = function(){
 			import hwinfo.collect;
 			import thread.command;
 			var data = hwinfo.collect.all();
+			if(!data) data = {error = "采集返回空结果"};
 			thread.command.send(hwnd, "onCollectDone", data);
 		}, mainForm.hwnd
 	);

@@ -6,6 +6,19 @@ import fsys;
 
 namespace hwinfo.collect;
 
+var GetDriveTypeW = ::Kernel32.api("GetDriveTypeW", "INT(ustring)");
+
+var isNetworkDrive = function(path){
+	if(!path || #path == 0) return true;
+	path = ..string.trim(path);
+	if(#path == 0) return true;
+	if(path[[1]] == '\\' || path[[1]] == '/') return true;
+	var drive = ..string.match(path, "^(\a)\:");
+	if(!drive) return true;
+	var driveType = GetDriveTypeW(drive ++ ":\");
+	return driveType == 4;
+}
+
 hostname = function(){
 	import com.wmi;
 	var name = ..com.wmi.get("Win32_ComputerSystem", "Name");
@@ -329,6 +342,7 @@ software = function(){
 	// 读取安装目录创建时间（目录在升级时通常不会被重建）
 	var getLocationDate = function(path){
 		if(!path || #path == 0) return "";
+		if(isNetworkDrive(path)) return "";
 		if(!..io.exist(path)) return "";
 		var tm = ..fsys.getTime(path);
 		if(!tm || !tm.creation) return "";
