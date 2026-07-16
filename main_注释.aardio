@@ -536,6 +536,7 @@ var doCollect = function(){
             import hwinfo.collect;
             import thread.command;
             var data = hwinfo.collect.all();
+            if(!data) data = {error = "采集返回空结果"};  // 防御性兜底：确保 onCollectDone 始终被调用，避免 UI 卡死
             thread.command.send(hwnd, "onCollectDone", data);
         }, mainForm.hwnd
     );

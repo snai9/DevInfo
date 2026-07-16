@@ -38,6 +38,27 @@ import fsys;
 
 namespace hwinfo.collect;
 
+//============================================================
+//  isNetworkDrive：判断路径是否为网络驱动器或 UNC 路径
+//============================================================
+//  使用 Win32 API GetDriveTypeW 判断盘符类型。
+//  DRIVE_REMOTE(4) = 网络驱动器，直接跳过避免 fsys.getTime 阻塞。
+//  UNC 路径（\\server\share）也视为网络路径。
+//  返回：true = 网络路径/无效路径，应跳过；false = 本地路径，可安全访问。
+//============================================================
+var GetDriveTypeW = ::Kernel32.api("GetDriveTypeW", "INT(ustring)");
+
+var isNetworkDrive = function(path){
+    if(!path || #path == 0) return true;
+    path = ..string.trim(path);
+    if(#path == 0) return true;
+    if(path[[1]] == '\\' || path[[1]] == '/') return true;
+    var drive = ..string.match(path, "^(\a)\:");
+    if(!drive) return true;
+    var driveType = GetDriveTypeW(drive ++ ":\");
+    return driveType == 4;
+}
+
 
 
 
@@ -515,6 +536,7 @@ software = function(){
     //      4. 返回的 tm.creation 已经是 time 对象，无需再包 fsys.time
     var getLocationDate = function(path){
         if(!path || #path == 0) return "";
+        if(isNetworkDrive(path)) return "";  // 网络盘/UNC路径跳过，避免 fsys.getTime 阻塞
         if(!..io.exist(path)) return "";
         var tm = ..fsys.getTime(path);
         if(!tm || !tm.creation) return "";
