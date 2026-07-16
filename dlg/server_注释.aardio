@@ -1,0 +1,778 @@
+//============================================================
+//  硬件信息管理 —— 服务端主程序
+//============================================================
+//  本文件是 C/S 架构中服务端部分的入口。
+//  通过 main.aardio 的 loadcodex("/dlg/server.aardio") 加载执行。
+//
+//  主要功能：
+//      1. 启动/停止 HTTP 服务（监听 0.0.0.0:8080）
+//      2. 接收客户端上传的硬件数据并存入 SQLite
+//      3. 提供数据查询、编辑、删除、导出、操作日志查看
+//
+//  数据库路径：%APPDATA%\hwinfo\hwinfo.db
+//  界面框架：win.form + vlistEx 表格控件
+//============================================================
+import win.ui;
+import win.dlg.message;
+import hwserver.api;       // HTTP 服务接口
+import hwserver.db;        // 数据库初始化
+import hwserver.data;      // 数据查询辅助
+import hwserver.log;       // 操作日志
+import sqlite;             // SQLite 数据库
+import godking.vlistEx;    // 增强型 listview 控件
+import thread.command;     // 线程间消息
+import io;
+import string;
+import time;
+import fsys.dlg;           // 文件保存对话框
+
+/*DSG{{*/
+//============================================================
+//  服务端窗体定义
+//============================================================
+//  颜色：BGR 格式（0xBBGGRR）
+//  字体：LOGFONT(h=-13) 负数表示像素高度
+//  锚点：db=1 底部锚定，dl=1 左边锚定，dr=1 右边锚定，dt=1 顶部锚定
+//  控件类型：
+//      groupbox 分组框
+//      static   文本标签
+//      plus     按钮（可设置皮肤）
+//      edit     文本框
+//      combobox 下拉框
+//      vlistEx  增强型 listview（来自 godking 库）
+//============================================================
+var winform = win.form(text="硬件信息管理 — 服务端";right=959;bottom=599;bgcolor=0xE0F0F8;border="dialog frame";center=1;maximize=1)
+winform.add(
+btnDelete={cls="plus";text="删除选中";left=140;top=524;right=260;bottom=552;db=1;dl=1;z=9};
+btnEdit={cls="plus";text="编辑选中";left=20;top=524;right=132;bottom=552;bgcolor=0xE0F0F8;db=1;dl=1;z=8};
+btnExport={cls="plus";text="导出";left=720;top=524;right=828;bottom=552;db=1;dr=1;z=11};
+btnLog={cls="plus";text="操作日志";left=610;top=524;right=710;bottom=552;db=1;dr=1;z=17};
+btnRefresh={cls="plus";text="刷新记录";left=836;top=524;right=944;bottom=552;db=1;dr=1;z=10};
+btnStart={cls="plus";text="启动服务";left=196;top=10;right=300;bottom=38;bgcolor=0xE0F0F8;dl=1;dt=1;z=5};
+btnStop={cls="plus";text="停止服务";left=308;top=10;right=412;bottom=38;bgcolor=0xE0F0F8;disabled=1;dl=1;dt=1;z=6};
+cmbUnit={cls="combobox";left=24;top=48;right=200;bottom=72;color=0x666666;dl=1;dt=1;edge=1;items={"全部"};mode="";z=12};
+editPort={cls="plus";left=92;top=10;right=180;bottom=38;dl=1;dt=1;edge=1;editable=1;font=LOGFONT(h=-14);textPadding={top=6;bottom=2};z=4};
+grpRecords={cls="groupbox";text="已收集的硬件信息记录";left=12;top=76;right=948;bottom=556;color=0x0B86B8;db=1;dl=1;dr=1;dt=1;font=LOGFONT(h=-13);z=2};
+lblPort={cls="static";text="监听端口：";left=16;top=14;right=88;bottom=34;bgcolor=0xE0F0F8;color=0x0B86B8;dl=1;dt=1;font=LOGFONT(h=-14);z=3};
+lblStatus={cls="static";text="状态：未启动";left=420;top=14;right=940;bottom=34;bgcolor=0xE0F0F8;color=0x999999;dl=1;dr=1;dt=1;font=LOGFONT(h=-14);z=1};
+lblUnit={cls="static";text="按单位筛选：";left=24;top=50;right=110;bottom=70;color=0x0B86B8;dl=1;dt=1;z=13};
+editSearch={cls="edit";left=320;top=48;right=700;bottom=72;color=0x666666;dl=1;dt=1;edge=1;font=LOGFONT(h=-13);z=14};
+btnSearch={cls="plus";text="搜索";left=706;top=48;right=780;bottom=72;dl=1;dt=1;z=15};
+lblSearch={cls="static";text="关键词：";left=250;top=50;right=316;bottom=70;color=0x0B86B8;dl=1;dt=1;z=16};
+vlist={cls="vlistEx";left=24;top=92;right=936;bottom=516;ah=1;aw=1;bgcolor=0xE0F0F8;db=1;dl=1;dr=1;dt=1;edge=1;z=7}
+)
+/*}}*/
+
+
+
+//============================================================
+//  一、初始化
+//============================================================
+
+// 默认端口号
+winform.editPort.text = "8080";
+
+// HTTP 服务主对象
+var serverMain;
+
+// 数据库路径：%APPDATA%\hwinfo\hwinfo.db
+var dbPath = io.appData("hwinfo/hwinfo.db");
+
+// 初始化数据库（创建表结构）
+var db = hwserver.db.init(dbPath);
+if(db) db.close();
+
+
+
+//============================================================
+//  二、表格列定义
+//============================================================
+//  colNames     显示用列名（中文）
+//  dbColNames   数据库字段名（英文，与 SQL 列对应）
+//  colScaleWidths 列宽度比例
+//  索引保持一致：第 N 列对应 colNames[N] 和 dbColNames[N]
+//============================================================
+var colScaleWidths = {40;60;70;100;90;100;120;130;160;100;120;90;100;90;150;230;70};
+var colNames = {"ID";"使用人";"单位";"部门及位置";"计算机编号";"计算机名";"IP地址";"MAC地址";"操作系统";"计算机品牌";"办公软件";"办公软件日期";"杀毒软件";"杀毒软件日期";"内存";"硬盘";"上传时间"};
+var dbColNames = {"id";"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"officeDate";"antivirus";"avDate";"memories";"disks";"uploadTime"};
+
+
+
+//============================================================
+//  三、vlistEx 表格初始化
+//============================================================
+//  vlistEx 是 godking.vlistEx 提供的增强型 listview 控件。
+//  支持：列宽自适应、单元格编辑、复选框、排序、多行显示等。
+//============================================================
+
+// 设置表头
+winform.vlist.setTable(
+    {fields=colNames},,colScaleWidths
+    );
+// fillParent(-1,-1) 让控件填满父容器
+winform.vlist.fillParent(-1,-1);
+// 1=居中对齐
+winform.vlist.headerAlign = 1;
+// 允许单元格编辑
+winform.vlist.onEditBegin = true;
+// 单元格编辑结束后的回调：保存到数据库
+winform.vlist.onEditEnd = function(row,col,text,endType){
+    if(col == 1) return false;  // 第 1 列（ID）不可编辑
+    var idText = owner.getCellText(row, 1);
+    if(!idText) return false;
+    var dbCol = dbColNames[col];
+    if(!dbCol or dbCol == "id") return false;
+    var db = sqlite(dbPath);
+    if(!db) return false;
+    // sqlite.escape 用于安全转义字符串值
+    db.exec("UPDATE hwinfo SET " ++ dbCol ++ "=" ++ sqlite.escape(text) ++ " WHERE id=" ++ idText);
+    db.close();
+    return true;
+};
+// 显示复选框
+winform.vlist.checkBox.show = true;
+// 垂直线宽度设为 0（不显示垂直分隔线）
+winform.vlist.lineWidthV = 0;
+// 斑马纹颜色：奇数行 0xF5F5F5（浅灰）
+winform.vlist.color1 = 0x888888;
+winform.vlist.bkColor1 = 0xF5F5F5;
+// 选中行背景色：浅蓝
+winform.vlist.selectedBkColor = 0xE0F0FF;
+// 表头行高 36，数据行高 66
+winform.vlist.setHeaderHeight(36);
+winform.vlist.setRowHeight(66);
+// 字体
+winform.vlist.font = ::LOGFONT(name="Microsoft YaHei";h=-12;color=0x333333);
+winform.vlist.headerFont = ::LOGFONT(name="Microsoft YaHei";h=-12;color=0x0B86B8;bold=true);
+
+// 列点击排序
+winform.vlist.onSortColumn = function(col,desc,row,mergeCol){
+    // 参数：col 列号，desc 是否降序，row 当前点击的行，mergeCol 是否合并列
+    // sort(col, desc, 3, true, desc) 第 3 个参数是排序的数据列
+    owner.sort(col,desc,3,true,desc);
+}
+
+// 窗口大小变化时调整列宽
+winform.vlist.adjust = function(cx,cy,wParam){
+    // 固定列：1-14, 17
+    owner.fitColWidth({1;2;3;4;5;6;7;8;9;10;11;12;13;14;17},20,true);
+    owner.fillParent(-1,-1);
+}
+
+
+
+//============================================================
+//  四、按钮皮肤
+//============================================================
+//  颜色规则：plus.skin() 用 ARGB 格式（必须带 0xFF alpha 前缀）
+//  状态：default/hover/active/disabled
+//============================================================
+var applySkin = function(){
+    winform.btnStart.skin({
+        background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+    winform.btnStop.skin({
+        background = {default=0xFFCC4444; hover=0xFFDD5555; active=0xFFAA2222; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+    winform.btnRefresh.skin({
+        background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+    winform.btnDelete.skin({
+        background = {default=0xFFCC4444; hover=0xFFDD5555; active=0xFFAA2222; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+    winform.btnEdit.skin({
+        background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+    winform.btnExport.skin({
+        background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+    winform.btnSearch.skin({
+        background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+    winform.btnLog.skin({
+        background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4; disabled=0xFFCCCCCC};
+        color = {default=0xFFFFFFFF; disabled=0xFF888888}
+    })
+}
+applySkin();
+
+
+
+//============================================================
+//  五、refreshUnitFilter：刷新单位下拉框
+//============================================================
+//  从数据库中查询所有不重复的单位，填充到 cmbUnit 控件。
+//  "全部" 是固定项，始终在第一位。
+//============================================================
+var refreshUnitFilter = function(){
+    var db = sqlite(dbPath);
+    if(!db) return;
+    var units = hwserver.data.getUnits(db);
+    db.close();
+    var items = {"全部"};
+    for i = 1; #units {
+        table.push(items, units[i]);
+    }
+    winform.cmbUnit.items = items;
+    winform.cmbUnit.selIndex = 1;  // 默认选中"全部"
+}
+
+
+
+//============================================================
+//  六、loadRecords：加载并显示记录
+//============================================================
+//  参数：
+//      unit    单位筛选（"全部" 或具体单位名）
+//      keyword 搜索关键词（在多个字段中模糊匹配）
+//
+//  防御性 SQL 拼接：
+//      - 用 sqlite.escape 转义所有用户输入
+//      - 用数组收集条件，最后用 string.join 拼接
+//      - 避免字符串拼接漏洞
+//============================================================
+var loadRecords = function(unit, keyword){
+    var db = sqlite(dbPath);
+    if(!db) return;
+
+    // 构建 WHERE 子句
+    var where = {};
+    if(unit && unit != "" && unit != "全部") {
+        ..table.push(where, "unit=" ++ sqlite.escape(unit));
+    }
+    if(keyword && keyword != "") {
+        // 模糊匹配 %keyword%
+        var kw = "%" ++ keyword ++ "%";
+        // 在这些字段中搜索
+        var searchCols = {"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"antivirus"};
+        // 用 OR 连接所有列的 LIKE 条件
+        var orParts = {};
+        for i = 1; #searchCols {
+            ..table.push(orParts, searchCols[i] ++ " LIKE " ++ sqlite.escape(kw));
+        }
+        ..table.push(where, "(" ++ ..string.join(orParts, " OR ") ++ ")");
+    }
+
+    var sql = "SELECT * FROM hwinfo";
+    if(#where > 0) sql = sql ++ " WHERE " ++ ..string.join(where, " AND ");
+    // 按上传时间降序，最新的在最上面
+    sql = sql ++ " ORDER BY uploadTime DESC";
+
+    var rows = db.getTable(sql);
+    db.close();
+    if(!rows) return;
+
+    // 把数据库行转换为 vlist 表格数据
+    var t = {fields=colNames};
+    for i = 1; #rows {
+        var row = rows[i];
+        table.push(t, {
+            ID = tostring(row[["id"]]);
+            ["使用人"] = row[["used"]];
+            ["单位"] = row[["unit"]];
+            ["部门及位置"] = row[["dept"]];
+            ["计算机编号"] = row[["pcId"]];
+            ["计算机名"] = row[["hostname"]];
+            ["IP地址"] = row[["ips"]];
+            ["MAC地址"] = row[["macs"]];
+            ["操作系统"] = row[["osver"]];
+            ["计算机品牌"] = row[["pcBrand"]];
+            ["办公软件"] = row[["office"]];
+            ["办公软件日期"] = row[["officeDate"]];
+            ["杀毒软件"] = row[["antivirus"]];
+            ["杀毒软件日期"] = row[["avDate"]];
+            ["内存"] = row[["memories"]];
+            ["硬盘"] = row[["disks"]];
+            ["上传时间"] = row[["uploadTime"]];
+        });
+    }
+    // 把数据填充到 vlist
+    winform.vlist.setTable(t,,colScaleWidths,0);
+    // 设置第 15、16 列（内存、硬盘）为多行显示
+    winform.vlist.setColumnType({15,16},-1,true,1);
+    // 调整列宽并填满
+    winform.vlist.fitColWidth({1;2;3;4;5;6;7;8;9;10;11;12;13;14;17},20,true);
+    winform.vlist.fillParent(-1,-1);
+}
+
+
+
+//============================================================
+//  七、线程通知器
+//============================================================
+//  接收 HTTP 服务接收到上传时发送的通知，自动刷新列表。
+//============================================================
+var notifier = thread.command(winform);
+notifier.onUpload = function(){
+    refreshUnitFilter();
+    loadRecords(null, ..string.trim(winform.editSearch.text));
+}
+
+
+
+//============================================================
+//  八、按钮事件处理
+//============================================================
+
+// 单位筛选下拉框变化
+winform.cmbUnit.oncommand = function(id,event){
+    var idx = winform.cmbUnit.selIndex;
+    if(!idx) return;
+    var unit = winform.cmbUnit.items[idx];
+    loadRecords(unit, ..string.trim(winform.editSearch.text));
+}
+
+// 启动服务
+winform.btnStart.oncommand = function(id, event){
+    var port = tonumber(winform.editPort.text);
+    if(!port or port < 1 or port > 65535) {
+        winform.msgbox("请输入有效的端口号（1-65535）");
+        return;
+    }
+
+    // 启动 HTTP 服务
+    // 第二个返回值 ok 表示是否成功，errMsg 是错误信息
+    serverMain, ok, errMsg = hwserver.api.start("0.0.0.0", port, dbPath, notifier.hwnd,
+        function(success, msg){
+            // 状态回调（服务启动/停止时调用）
+            winform.lblStatus.text = "状态：" ++ msg;
+            winform.lblStatus.color = success ? 0x008800 : 0x000088;
+        }
+    );
+
+    if(ok) {
+        // 启动成功：禁用启动按钮，启用停止按钮
+        winform.btnStart.disabled = true;
+        winform.btnStop.disabled = false;
+        winform.editPort.disabled = true;
+        refreshUnitFilter();
+        loadRecords(null, ..string.trim(winform.editSearch.text));
+    }
+    else {
+        winform.msgbox("服务启动失败：" ++ (errMsg || "未知错误"));
+    }
+}
+
+// 停止服务
+winform.btnStop.oncommand = function(id, event){
+    if(serverMain) {
+        serverMain.stop();
+        serverMain = null;
+    }
+    winform.lblStatus.text = "状态：已停止";
+    winform.lblStatus.color = 0x999999;
+    winform.btnStart.disabled = false;
+    winform.btnStop.disabled = true;
+    winform.editPort.disabled = false;
+}
+
+// 刷新记录
+winform.btnRefresh.oncommand = function(id, event){
+    refreshUnitFilter();
+    var idx = winform.cmbUnit.selIndex;
+    var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+    loadRecords(unit, ..string.trim(winform.editSearch.text));
+}
+
+// 搜索按钮
+winform.btnSearch.oncommand = function(id, event){
+    var idx = winform.cmbUnit.selIndex;
+    var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+    loadRecords(unit, ..string.trim(winform.editSearch.text));
+}
+
+// 搜索框回车
+winform.editSearch.onOk = function(){
+    var idx = winform.cmbUnit.selIndex;
+    var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+    loadRecords(unit, ..string.trim(winform.editSearch.text));
+}
+
+
+
+//============================================================
+//  九、showEditDialog：编辑单条记录
+//============================================================
+//  参数：row  vlist 中的行号
+//  流程：读取记录 → 弹出编辑框 → 保存到数据库 → 刷新列表
+//============================================================
+var showEditDialog = function(row){
+    if(!row) return;
+    var idText = winform.vlist.getCellText(row, 1);
+    if(!idText) return;
+
+    // 读取完整记录
+    var db = sqlite(dbPath);
+    if(!db) return;
+    var rec = db.stepQuery("SELECT * FROM hwinfo WHERE id=" ++ idText);
+    db.close();
+    if(!rec) return;
+
+    // 创建编辑对话框
+    var dlg = ..win.form(
+        text="编辑记录"; parent=winform; border="dialog window";
+        bgcolor=0xE0F0F8; right=599; bottom=659; center=1; mode="popup"
+    )
+    dlg.add(
+        lbl={cls="static"; text="使用人："; left=16; top=16; right=130; bottom=36; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editUsed={cls="edit"; left=136; top=14; right=580; bottom=38; color=0x666666; font=LOGFONT(h=-13)};
+
+        lblU={cls="static"; text="单位："; left=16; top=50; right=130; bottom=70; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editUnit={cls="edit"; left=136; top=48; right=580; bottom=72;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lblD={cls="static"; text="部门及位置："; left=16; top=84; right=130; bottom=104; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editDept={cls="edit"; left=136; top=82; right=580; bottom=106; color=0x666666; font=LOGFONT(h=-13)};
+
+        lblP={cls="static"; text="计算机编号："; left=16; top=118; right=130; bottom=138; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editPcId={cls="edit"; left=136; top=116; right=580; bottom=140;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lbl2={cls="static"; text="计算机名："; left=16; top=152; right=130; bottom=172; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editHostname={cls="edit"; left=136; top=150; right=580; bottom=174;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lbl3={cls="static"; text="IP地址："; left=16; top=186; right=130; bottom=206; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editIps={cls="edit"; left=136; top=184; right=580; bottom=208;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lbl4={cls="static"; text="MAC地址："; left=16; top=220; right=130; bottom=240; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editMacs={cls="edit"; left=136; top=218; right=580; bottom=242; color=0x666666; font=LOGFONT(h=-13)};
+
+        lbl5={cls="static"; text="操作系统："; left=16; top=254; right=130; bottom=274; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editOsver={cls="edit"; left=136; top=252; right=580; bottom=276;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lblB={cls="static"; text="计算机品牌："; left=16; top=288; right=130; bottom=308; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editPcBrand={cls="edit"; left=136; top=286; right=580; bottom=310;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lbl6={cls="static"; text="办公软件："; left=16; top=322; right=130; bottom=342; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editOffice={cls="edit"; left=136; top=320; right=580; bottom=344;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lblOD={cls="static"; text="办公软件日期："; left=16; top=356; right=130; bottom=376; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editOfficeDate={cls="edit"; left=136; top=354; right=580; bottom=378;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lbl7={cls="static"; text="杀毒软件："; left=16; top=390; right=130; bottom=410; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editAntivirus={cls="edit"; left=136; top=388; right=580; bottom=412; color=0x666666; font=LOGFONT(h=-13)};
+
+        lblAD={cls="static"; text="杀毒软件日期："; left=16; top=424; right=130; bottom=444; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editAvDate={cls="edit"; left=136; top=422; right=580; bottom=446;  color=0x666666; font=LOGFONT(h=-13)};
+
+        lbl8={cls="static"; text="内存："; left=16; top=458; right=130; bottom=478; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editMemories={cls="edit"; left=136; top=454; right=580; bottom=514; color=0x666666; multiline=1; vscroll=1; font=LOGFONT(h=-12)};
+
+        lbl9={cls="static"; text="硬盘："; left=16; top=522; right=130; bottom=542; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+        editDisks={cls="edit"; left=136; top=518; right=580; bottom=578; color=0x666666; multiline=1; vscroll=1; font=LOGFONT(h=-12)};
+
+        btnOk={cls="plus"; text="保存"; left=200; top=594; right=300; bottom=624; z=90};
+        btnCancel={cls="plus"; text="取消"; left=320; top=594; right=420; bottom=624; z=91}
+    )
+
+    // 填充默认值
+    dlg.editUsed.text = rec[["used"]] || "";
+    dlg.editUnit.text = rec[["unit"]] || "";
+    dlg.editDept.text = rec[["dept"]] || "";
+    dlg.editPcId.text = rec[["pcId"]] || "";
+    dlg.editHostname.text = rec[["hostname"]] || "";
+    dlg.editIps.text = rec[["ips"]] || "";
+    dlg.editMacs.text = rec[["macs"]] || "";
+    dlg.editOsver.text = rec[["osver"]] || "";
+    dlg.editPcBrand.text = rec[["pcBrand"]] || "";
+    dlg.editOffice.text = rec[["office"]] || "";
+    dlg.editOfficeDate.text = rec[["officeDate"]] || "";
+    dlg.editAntivirus.text = rec[["antivirus"]] || "";
+    dlg.editAvDate.text = rec[["avDate"]] || "";
+    dlg.editMemories.text = rec[["memories"]] || "";
+    dlg.editDisks.text = rec[["disks"]] || "";
+
+    // 按钮皮肤
+    dlg.btnOk.skin({
+        background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B};
+        color = {default=0xFFFFFFFF}
+    })
+    dlg.btnCancel.skin({
+        background = {default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777};
+        color = {default=0xFFFFFFFF}
+    })
+
+    // 保存按钮
+    dlg.btnOk.oncommand = function(id, event){
+        var db2 = sqlite(dbPath);
+        if(!db2) {
+            dlg.msgbox("数据库连接失败");
+            return;
+        }
+        // 循环拼接 UPDATE SQL（避免冗长的字符串拼接代码）
+        // fields 和 values 数组一一对应，循环生成 set 子句
+        var fields = {"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"officeDate";"antivirus";"avDate";"memories";"disks"};
+        var values = {dlg.editUsed.text; dlg.editUnit.text; dlg.editDept.text; dlg.editPcId.text; dlg.editHostname.text; dlg.editIps.text; dlg.editMacs.text; dlg.editOsver.text; dlg.editPcBrand.text; dlg.editOffice.text; dlg.editOfficeDate.text; dlg.editAntivirus.text; dlg.editAvDate.text; dlg.editMemories.text; dlg.editDisks.text};
+        var parts = {};
+        for i = 1; #fields {
+            ..table.push(parts, fields[i] ++ "=" ++ sqlite.escape(values[i]));
+        }
+        var sql = "UPDATE hwinfo SET " ++ ..string.join(parts, ",") ++ " WHERE id=" ++ idText;
+        db2.exec(sql);
+        db2.close();
+        dlg.close();
+        // 刷新列表
+        var idx = winform.cmbUnit.selIndex;
+        var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+        loadRecords(unit, ..string.trim(winform.editSearch.text));
+    }
+    dlg.btnCancel.oncommand = function(id, event){
+        dlg.close();
+    }
+    dlg.doModal();
+}
+
+// 右键表格行：弹出编辑对话框
+winform.vlist.onRClick = function(row,col,x,y,buttonIndex){
+    if(!row) return;
+    showEditDialog(row);
+}
+
+// 编辑选中
+winform.btnEdit.oncommand = function(id, event){
+    // getChecked() 返回选中行的数组
+    var checked = winform.vlist.getChecked();
+    if(!checked or #checked == 0) {
+        winform.msgbox("请先勾选要编辑的记录");
+        return;
+    }
+    if(#checked > 1) {
+        winform.msgbox("编辑只能选择一条记录，请只勾选一条");
+        return;
+    }
+    showEditDialog(checked[1]);
+}
+
+// 删除选中
+winform.btnDelete.oncommand = function(id, event){
+    var checked = winform.vlist.getChecked();
+    if(!checked or #checked == 0) {
+        winform.msgbox("请先勾选要删除的记录");
+        return;
+    }
+
+    // 二次确认
+    if(!winform.msgboxTest("确定删除选中的 " ++ #checked ++ " 条记录？", "确认删除")) {
+        return;
+    }
+
+    var db = sqlite(dbPath);
+    if(!db) {
+        winform.msgbox("数据库连接失败");
+        return;
+    }
+
+    // 批量删除
+    for i = 1; #checked {
+        var idText = winform.vlist.getCellText(checked[i], 1);
+        db.exec("DELETE FROM hwinfo WHERE id=" ++ idText);
+    }
+    db.close();
+    // 刷新
+    var idx = winform.cmbUnit.selIndex;
+    var unit = idx ? winform.cmbUnit.items[idx] : "全部";
+    loadRecords(unit, ..string.trim(winform.editSearch.text));
+}
+
+
+
+//============================================================
+//  十、查看操作日志
+//============================================================
+//  读取最近 500 条操作日志，显示在只读 edit 控件中。
+//============================================================
+winform.btnLog.oncommand = function(id, event){
+    var dlg = ..win.form(
+        text="操作日志"; parent=winform; border="dialog window";
+        bgcolor=0xE0F0F8; right=799; bottom=559; center=1; mode="popup"
+    )
+    dlg.add(
+        editLog={cls="edit"; left=12; top=12; right=788; bottom=480; bgcolor=0xFFFFFF; color=0x333333; font=LOGFONT(h=-12;name="Consolas"); multiline=1; readonly=1; vscroll=1; hscroll=1; z=1};
+        btnClearLog={cls="plus"; text="清空日志"; left=300; top=500; right=400; bottom=530; z=2};
+        btnCloseLog={cls="plus"; text="关闭"; left=420; top=500; right=500; bottom=530; z=3}
+    )
+    // 读取最近 500 条日志
+    dlg.editLog.text = hwserver.log.readRecent(500);
+    // 光标移到末尾
+    dlg.editLog.setSel(-1, -1);
+
+    dlg.btnClearLog.skin({
+        background = {default=0xFFCC4444; hover=0xFFDD5555; active=0xFFAA2222};
+        color = {default=0xFFFFFFFF}
+    })
+    dlg.btnCloseLog.skin({
+        background = {default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777};
+        color = {default=0xFFFFFFFF}
+    })
+
+    dlg.btnClearLog.oncommand = function(id, event){
+        if(dlg.msgboxTest("确定清空所有操作日志？", "确认")) {
+            hwserver.log.clear();
+            dlg.editLog.text = "";
+        }
+    }
+    dlg.btnCloseLog.oncommand = function(id, event){
+        dlg.close();
+    }
+    dlg.doModal();
+}
+
+
+
+//============================================================
+//  十一、导出 CSV / Excel
+//============================================================
+//  1. 弹出选择格式对话框
+//  2. CSV 用 string.save 写入（含 UTF-8 BOM 防止 Excel 乱码）
+//  3. Excel 用 com.excel 自动化调用
+//============================================================
+winform.btnExport.oncommand = function(id, event){
+    // 先读出所有数据
+    var db = sqlite(dbPath);
+    if(!db) {
+        winform.msgbox("数据库连接失败");
+        return;
+    }
+    var rows = db.getTable("SELECT * FROM hwinfo ORDER BY uploadTime DESC");
+    db.close();
+    if(!rows or #rows == 0) {
+        winform.msgbox("没有数据可导出");
+        return;
+    }
+
+    // 表头和数据字段（与 colNames/dbColNames 一致）
+    var headers = {"ID";"使用人";"单位";"部门及位置";"计算机编号";"计算机名";"IP地址";"MAC地址";"操作系统";"计算机品牌";"办公软件";"办公软件日期";"杀毒软件";"杀毒软件日期";"内存";"硬盘";"上传时间"};
+    var keys = {"id";"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"officeDate";"antivirus";"avDate";"memories";"disks";"uploadTime"};
+
+    // 弹出格式选择对话框
+    var choiceDlg = ..win.form(
+        text="选择导出格式"; parent=winform; border="dialog window";
+        bgcolor=0xE0F0F8; right=319; bottom=159; center=1; mode="popup"
+    )
+    choiceDlg.add(
+        lbl={cls="static"; text="请选择导出格式："; left=16; top=16; right=300; bottom=36; bgcolor=0xE0F0F8; color=0x0B86B8; font=LOGFONT(h=-14)};
+        btnCsv={cls="plus"; text="导出 CSV"; left=20; top=50; right=150; bottom=82; z=1};
+        btnExcel={cls="plus"; text="导出 Excel"; left=170; top=50; right=300; bottom=82; z=2};
+        btnCancelExp={cls="plus"; text="取消"; left=110; top=100; right=210; bottom=130; z=3}
+    )
+    choiceDlg.btnCsv.skin({
+        background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4};
+        color = {default=0xFFFFFFFF}
+    })
+    choiceDlg.btnExcel.skin({
+        background = {default=0xFF5B9BD5; hover=0xFF6CAAE0; active=0xFF4A8BC4};
+        color = {default=0xFFFFFFFF}
+    })
+    choiceDlg.btnCancelExp.skin({
+        background = {default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777};
+        color = {default=0xFFFFFFFF}
+    })
+
+    // 导出 CSV
+    // 注意：CSV 字段用双引号包裹，字段内的双引号需要转义为两个双引号
+    var doExportCsv = function(){
+        // fsys.dlg.save 弹出保存对话框
+        var path = fsys.dlg.save("CSV文件|*.csv", "导出硬件信息",, winform);
+        if(!path) return;
+
+        var lines = {};
+        var headerLine = {};
+        for h = 1; #headers {
+            // 把字段内的双引号替换为两个双引号（CSV 转义规则）
+            table.push(headerLine, '"' ++ string.replace(headers[h], '"', '""') ++ '"');
+        }
+        table.push(lines, string.join(headerLine, ","));
+
+        for i = 1; #rows {
+            var line = {};
+            for k = 1; #keys {
+                var val = tostring(rows[i][[keys[k]]] || "");
+                table.push(line, '"' ++ string.replace(val, '"', '""') ++ '"');
+            }
+            table.push(lines, string.join(line, ","));
+        }
+
+        // 用 \r\n 作为行分隔符（CSV 标准，Excel 友好）
+        var content = string.join(lines, '\r\n');
+        // UTF-8 BOM：防止 Excel 用 ANSI 打开导致中文乱码
+        var BOM = '\xEF\xBB\xBF';
+        string.save(path, BOM ++ content);
+        choiceDlg.close();
+        winform.msgbox("导出成功！\n" ++ path);
+    }
+
+    // 导出 Excel（用 COM 自动化）
+    var doExportExcel = function(){
+        import com.excel;
+        var excel = com.excel(true);  // true = 显示 Excel
+        if(!excel) {
+            choiceDlg.close();
+            winform.msgbox("请先安装 Excel 或 WPS");
+            return;
+        }
+        excel.alerts = false;  // 关闭警告弹窗
+        excel.oExcel.WorkBooks.Add();
+        var sheet = excel.oExcel.ActiveWorkbook.Sheets(1);
+
+        // 写表头
+        for h = 1; #headers {
+            sheet.Cells(1, h).Value2 = headers[h];
+        }
+        // 表头样式：粗体、浅蓝背景
+        var headerRange = sheet.Range(sheet.Cells(1, 1), sheet.Cells(1, #headers));
+        headerRange.Font.Bold = true;
+        headerRange.Interior.Color = 0xF0F8FF;
+
+        // 写数据
+        for i = 1; #rows {
+            for k = 1; #keys {
+                sheet.Cells(i + 1, k).Value2 = tostring(rows[i][[keys[k]]] || "");
+            }
+        }
+
+        // 自动列宽
+        sheet.UsedRange.Columns.AutoFit();
+
+        // 让用户选择保存路径
+        var path = fsys.dlg.save("Excel文件|*.xlsx", "导出硬件信息",, winform);
+        if(!path) {
+            excel.Quit();
+            choiceDlg.close();
+            return;
+        }
+
+        // 51 = xlOpenXMLWorkbook（.xlsx 格式）
+        excel.SaveAs(path, 51);
+        excel.Quit();
+        choiceDlg.close();
+        winform.msgbox("导出成功！\n" ++ path);
+    }
+
+    choiceDlg.btnCsv.oncommand = function(id, event){
+        doExportCsv();
+    }
+    choiceDlg.btnExcel.oncommand = function(id, event){
+        doExportExcel();
+    }
+    choiceDlg.btnCancelExp.oncommand = function(id, event){
+        choiceDlg.close();
+    }
+    choiceDlg.doModal();
+}
+
+
+
+//============================================================
+//  十二、启动
+//============================================================
+loadRecords(null, "");
+
+winform.show();
+winform.vlist.fitColWidth({1;2;3;4;5;6;7;8;9;10;11;12;13;14;17},20,true);
+winform.vlist.fillParent(-1,-1);
+..win.loopMessage();  // 进入消息循环（必须最后调用）

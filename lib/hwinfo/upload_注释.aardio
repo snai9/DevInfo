@@ -1,0 +1,119 @@
+//============================================================
+//  数据上传模块
+//============================================================
+//  本模块负责与硬件信息服务端通信：
+//      - send(data, serverUrl) 上传硬件数据
+//      - ping(serverUrl) 探测服务端是否在线
+//
+//  命名空间：hwinfo.upload
+//============================================================
+import inet.http;
+import JSON;
+
+namespace hwinfo.upload;
+
+
+//============================================================
+//  extractErrMsg：从响应中提取错误信息
+//============================================================
+//  参数：
+//      result      HTTP 响应内容（字符串或其他类型）
+//      defaultMsg  默认错误信息
+//
+//  返回：错误信息字符串
+//
+//  用途：统一处理 5xx 和 4xx 错误的错误信息提取，避免重复代码。
+//        服务端返回的 JSON 中通常包含 msg 字段，解析失败时使用默认值。
+//============================================================
+var extractErrMsg = function(result, defaultMsg){
+    if(type(result) == "string") {
+        var resp = ..JSON.tryParse(result);
+        if(resp && resp[["msg"]]) return resp[["msg"]];
+    }
+    return defaultMsg;
+};
+
+
+//============================================================
+//  send：上传硬件数据到服务端
+//============================================================
+//  参数：
+//      data       硬件数据表（collect.all() 的返回值 + used/unit/dept）
+//      serverUrl  服务端基地址（如 http://10.0.0.1:8080）
+//
+//  返回：{code, msg} 表
+//      code = 0   上传成功
+//      code = 1   记录已存在
+//      code = -1  上传失败（msg 含具体原因）
+//
+//  防御性编程：
+//      - 不使用 try/catch
+//      - 通过 http.statusCode 判断结果
+//      - statusCode 为 null/0 时表示无法连接
+//      - statusCode >= 500 时表示服务器错误
+//      - statusCode >= 400 时表示请求错误
+//      - 否则从响应 JSON 中解析 code/msg
+//============================================================
+send = function(data, serverUrl){
+    // 第二个参数 false 表示不使用 SSL（HTTP 而非 HTTPS）
+    var http = ..inet.http("hwinfo-client", false);
+    // 设置超时（毫秒）：连接、发送、接收各 10 秒
+    http.setTimeouts(10000, 10000, 10000);
+
+    // 把 data 表序列化为 JSON 字符串
+    var jsonStr = ..JSON.stringify(data);
+    // HTTP 请求头，Content-Type 必须正确
+    var headers = "Content-Type: application/json\r\n";
+
+    // POST 请求
+    var result = http.post(serverUrl ++ "/api/upload", jsonStr, headers);
+    var statusCode = http.statusCode;
+    http.close();
+
+    // 无法连接到服务器
+    if(!statusCode) {
+        return {code=-1; msg="无法连接服务器，请检查网络"};
+    }
+
+    // 5xx 服务器错误
+    if(statusCode >= 500) {
+        return {code=-1; msg=extractErrMsg(result, "服务器存储失败")};
+    }
+
+    // 4xx 客户端错误
+    if(statusCode >= 400) {
+        return {code=-1; msg=extractErrMsg(result, "请求格式错误")};
+    }
+
+    // 2xx 成功：解析响应 JSON
+    if(type(result) != "string" || !result) {
+        return {code=-1; msg="服务器响应格式错误"};
+    }
+
+    var resp = ..JSON.tryParse(result);
+    if(!resp) return {code=-1; msg="服务器响应格式错误"};
+
+    // 把服务端的 code/msg 透传给调用方
+    return resp;
+}
+
+
+
+//============================================================
+//  ping：探测服务端是否在线
+//============================================================
+//  参数：serverUrl  服务端基地址
+//  返回：true 在线，false 离线
+//
+//  用途：客户端启动时并发 ping 多个地址，快速找到可用的服务端。
+//============================================================
+ping = function(serverUrl){
+    var http = ..inet.http("hwinfo-ping", false);
+    // ping 用较短的超时（5 秒），避免长时间等待
+    http.setTimeouts(5000, 5000, 5000);
+    http.post(serverUrl ++ "/api/ping", "{}", "Content-Type: application/json\r\n");
+    var statusCode = http.statusCode;
+    http.close();
+    // 2xx 表示成功
+    return statusCode && statusCode >= 200 && statusCode < 300;
+}

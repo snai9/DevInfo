@@ -3,6 +3,8 @@ import win.dlg.message;
 
 namespace hwinfo.namedlg;
 
+var units = {"局机关";"维权中心";"档案中心";"信息中心";"社保中心";"就业局"};
+
 show = function(parent, defaultUsed, defaultUnit, defaultDept){
 	var dlg = ..win.form(
 		text="请输入使用者信息";
@@ -17,7 +19,7 @@ show = function(parent, defaultUsed, defaultUnit, defaultDept){
 		lblName={cls="static"; text="使用人姓名："; left=24; top=20; right=140; bottom=40; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
 		editName={cls="plus"; left=148; top=16; right=376; bottom=44; edge=1; editable=1; font=LOGFONT(h=-14); textPadding={top=6;bottom=2}; z=1};
 		lblUnit={cls="static"; text="所在单位："; left=24; top=60; right=140; bottom=80; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
-		cmbUnit={cls="combobox"; left=148; top=56; right=376; bottom=160; edge=1; font=LOGFONT(h=-14); items={"局机关";"维权中心";"档案中心";"信息中心";"社保中心";"就业局"}; z=2};
+		cmbUnit={cls="combobox"; left=148; top=56; right=376; bottom=160; edge=1; font=LOGFONT(h=-14); items=units; z=2};
 		lblDept={cls="static"; text="部门及位置："; left=24; top=100; right=140; bottom=120; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
 		editDept={cls="plus"; left=148; top=96; right=376; bottom=124; edge=1; editable=1; font=LOGFONT(h=-14); textPadding={top=6;bottom=2}; z=3};
 		btnOk={cls="plus"; text="确定"; left=120; top=228; right=210; bottom=262; z=4};
@@ -26,7 +28,6 @@ show = function(parent, defaultUsed, defaultUnit, defaultDept){
 	
 	dlg.editName.text = defaultUsed || "";
 	if(defaultUnit && defaultUnit != "") {
-		var units = {"局机关";"维权中心";"档案中心";"信息中心";"社保中心";"就业局"};
 		for i = 1; #units {
 			if(units[i] == defaultUnit) {
 				dlg.cmbUnit.selIndex = i;

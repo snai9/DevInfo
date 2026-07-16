@@ -356,23 +356,13 @@ var showEditDialog = function(row){
 			dlg.msgbox("数据库连接失败");
 			return;
 		}
-		var sql = "UPDATE hwinfo SET "
-			++ "used=" ++ sqlite.escape(dlg.editUsed.text) ++ ","
-			++ "unit=" ++ sqlite.escape(dlg.editUnit.text) ++ ","
-			++ "dept=" ++ sqlite.escape(dlg.editDept.text) ++ ","
-			++ "pcId=" ++ sqlite.escape(dlg.editPcId.text) ++ ","
-			++ "hostname=" ++ sqlite.escape(dlg.editHostname.text) ++ ","
-			++ "ips=" ++ sqlite.escape(dlg.editIps.text) ++ ","
-			++ "macs=" ++ sqlite.escape(dlg.editMacs.text) ++ ","
-			++ "osver=" ++ sqlite.escape(dlg.editOsver.text) ++ ","
-			++ "pcBrand=" ++ sqlite.escape(dlg.editPcBrand.text) ++ ","
-			++ "office=" ++ sqlite.escape(dlg.editOffice.text) ++ ","
-			++ "officeDate=" ++ sqlite.escape(dlg.editOfficeDate.text) ++ ","
-			++ "antivirus=" ++ sqlite.escape(dlg.editAntivirus.text) ++ ","
-			++ "avDate=" ++ sqlite.escape(dlg.editAvDate.text) ++ ","
-			++ "memories=" ++ sqlite.escape(dlg.editMemories.text) ++ ","
-			++ "disks=" ++ sqlite.escape(dlg.editDisks.text)
-			++ " WHERE id=" ++ idText;
+		var fields = {"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"officeDate";"antivirus";"avDate";"memories";"disks"};
+		var values = {dlg.editUsed.text; dlg.editUnit.text; dlg.editDept.text; dlg.editPcId.text; dlg.editHostname.text; dlg.editIps.text; dlg.editMacs.text; dlg.editOsver.text; dlg.editPcBrand.text; dlg.editOffice.text; dlg.editOfficeDate.text; dlg.editAntivirus.text; dlg.editAvDate.text; dlg.editMemories.text; dlg.editDisks.text};
+		var parts = {};
+		for i = 1; #fields {
+			..table.push(parts, fields[i] ++ "=" ++ sqlite.escape(values[i]));
+		}
+		var sql = "UPDATE hwinfo SET " ++ ..string.join(parts, ",") ++ " WHERE id=" ++ idText;
 		db2.exec(sql);
 		db2.close();
 		dlg.close();

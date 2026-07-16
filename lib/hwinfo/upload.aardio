@@ -3,6 +3,14 @@ import JSON;
 
 namespace hwinfo.upload;
 
+var extractErrMsg = function(result, defaultMsg){
+	if(type(result) == "string") {
+		var resp = ..JSON.tryParse(result);
+		if(resp && resp[["msg"]]) return resp[["msg"]];
+	}
+	return defaultMsg;
+};
+
 send = function(data, serverUrl){
 	var http = ..inet.http("hwinfo-client", false);
 	http.setTimeouts(10000, 10000, 10000);
@@ -18,21 +26,11 @@ send = function(data, serverUrl){
 	}
 	
 	if(statusCode >= 500) {
-		var errMsg = "服务器存储失败";
-		if(type(result) == "string") {
-			var resp = ..JSON.tryParse(result);
-			if(resp && resp[["msg"]]) errMsg = resp[["msg"]];
-		}
-		return {code=-1; msg=errMsg};
+		return {code=-1; msg=extractErrMsg(result, "服务器存储失败")};
 	}
 	
 	if(statusCode >= 400) {
-		var errMsg = "请求格式错误";
-		if(type(result) == "string") {
-			var resp = ..JSON.tryParse(result);
-			if(resp && resp[["msg"]]) errMsg = resp[["msg"]];
-		}
-		return {code=-1; msg=errMsg};
+		return {code=-1; msg=extractErrMsg(result, "请求格式错误")};
 	}
 	
 	if(type(result) != "string" || !result) {

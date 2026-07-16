@@ -1,0 +1,84 @@
+//============================================================
+//  客户端配置模块
+//============================================================
+//  本模块管理客户端的本地配置：
+//      - 使用人姓名（used）
+//      - 所在单位（unit）
+//      - 部门及位置（dept）
+//      - 服务器地址列表（serverUrls）
+//      - 当前活动服务器（activeUrl）
+//
+//  配置文件路径：%APPDATA%\hwinfo\config.json
+//  命名空间：hwinfo.config
+//============================================================
+import io;
+import JSON;
+
+namespace hwinfo.config;
+
+//------------------------------------------------------------
+//  默认服务器地址列表
+//------------------------------------------------------------
+//  这些是内置的备用地址，会在配置文件中没有自定义地址时使用。
+//  客户端会依次 ping 这些地址，第一个 200 的就是活动服务器。
+//------------------------------------------------------------
+defaultUrls = {"http://10.44.179.88:8080";"http://10.130.175.88:8080";"http://127.0.0.1:8080"};
+
+
+
+//============================================================
+//  load：从磁盘加载配置
+//============================================================
+//  返回：完整的配置表，所有字段都有合理默认值。
+//
+//  防御性编程：使用 `io.exist(path) && JSON.load(path)`
+//      - 避免 try/catch
+//      - 文件不存在时直接返回 false，短路求值得到 null
+//      - 之后用 if(!cfg) 兜底
+//
+//  向后兼容：如果旧配置只有 serverUrl（单数），自动转为 serverUrls（数组）
+//============================================================
+load = function(){
+    // io.appData(path) 返回 %APPDATA%\<path> 的完整路径
+    // 例如 C:\Users\xxx\AppData\Roaming\hwinfo\config.json
+    var path = ..io.appData("hwinfo/config.json");
+    var cfg = ..io.exist(path) && ..JSON.load(path);
+
+    // 配置文件不存在或解析失败时使用默认值
+    if(!cfg) return {used=""; unit=""; dept=""; serverUrls=defaultUrls; activeUrl=""};
+
+    // 字段兜底：确保所有必要字段都存在
+    if(!cfg.used) cfg.used = "";
+    if(!cfg.unit) cfg.unit = "";
+    if(!cfg.dept) cfg.dept = "";
+
+    // 向后兼容：旧版配置可能用 serverUrl（单数字符串）
+    if(!cfg.serverUrls || #cfg.serverUrls == 0) {
+        if(cfg[["serverUrl"]] && cfg[["serverUrl"]] != "") {
+            cfg.serverUrls = {cfg[["serverUrl"]]};
+        }
+        else {
+            cfg.serverUrls = defaultUrls;
+        }
+    }
+
+    // 设置当前活动服务器为列表中的第一个
+    if(!cfg.activeUrl) cfg.activeUrl = cfg.serverUrls[1] || "";
+
+    return cfg;
+}
+
+
+
+//============================================================
+//  save：保存配置到磁盘
+//============================================================
+//  自动创建目录（如果不存在）。
+//  JSON.save 内部会调用 string.save 写入文件。
+//============================================================
+save = function(cfg){
+    var dir = ..io.appData("hwinfo/");
+    ..io.createDir(dir);  // 目录不存在则创建
+    var path = ..io.appData("hwinfo/config.json");
+    ..JSON.save(path, cfg);
+}

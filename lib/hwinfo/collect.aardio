@@ -400,10 +400,9 @@ software = function(){
 	}
 
 	// WMI 补充杀软（无日期）
-	do {
-		import com.wmi;
-		var iter = ..com.wmi.eachProperties("AntiVirusProduct", "root\SecurityCenter2");
-		if(!iter) break;
+	import com.wmi;
+	var iter = ..com.wmi.eachProperties("AntiVirusProduct", "root\SecurityCenter2");
+	if(iter) {
 		for props, i in iter {
 			var displayName = props[["displayName"]];
 			if(!displayName || displayName == "") continue;
@@ -418,7 +417,7 @@ software = function(){
 				..table.push(avRecords, {name = displayName; installDate = ""; keyWriteTime = null; installLocation = ""});
 			}
 		}
-	} while(false)
+	}
 
 	var nameWithVersion = function(rec){
 		if(rec.version && rec.version != "") return rec.name ++ " " ++ rec.version;

@@ -1,0 +1,808 @@
+//============================================================
+//  硬件信息采集模块 —— 客户端核心业务模块
+//============================================================
+//  本模块提供以下功能：
+//      hostname()  获取本机计算机名
+//      network()   获取 IP/MAC 地址
+//      osver()     获取操作系统版本
+//      pcId()      获取计算机唯一编号（BIOS/主板序列号）
+//      brand()     获取计算机品牌（厂商+型号）
+//      software()  获取办公软件、杀毒软件及其安装日期
+//      memory()    获取内存条信息
+//      disk()      获取硬盘信息
+//      all()       一站式调用所有采集函数，返回合并结果
+//
+//  命名空间：hwinfo.collect
+//  使用方式：import hwinfo.collect; hwinfo.collect.all();
+//
+//  aardio 库说明：
+//      com.wmi           WMI（Windows Management Instrumentation）查询
+//      win.reg           注册表读写
+//      win.regReaderWow64 在 64 位系统访问 64 位注册表（32 位系统等价于 win.regReader）
+//      sys.installed     通过注册表枚举已安装程序
+//      fsys.time         处理 FILETIME
+//      fsys.getTime(path) 获取文件/目录时间（定义在 fsys/_.aardio 中）
+//
+//  重要提醒（不要猜，必须看源码）：
+//      1. fsys.fileInfo 不在 fsys 命名空间顶层，必须 import fsys.fileInfo 才可用
+//      2. fsys.info(path) 返回 SHGetFileInfoW 结果，没有 creationTime 字段
+//      3. 正确获取目录创建时间的方式：fsys.getTime(path).creation
+//      4. string.match 返回多个值（每个捕获组一个），不是数组
+//      5. 任何返回值都可能为 null，必须做防御性检查
+//============================================================
+import com.wmi;
+import sys.installed;
+import win.reg;
+import fsys.time;
+import fsys;
+
+namespace hwinfo.collect;
+
+
+
+
+//============================================================
+//  hostname：获取本机计算机名
+//============================================================
+//  通过 WMI 查询 Win32_ComputerSystem 类的 Name 属性。
+//  返回：成功返回字符串，失败返回 "未获取"。
+//============================================================
+hostname = function(){
+    import com.wmi;
+    var name = ..com.wmi.get("Win32_ComputerSystem", "Name");
+    return name || "未获取";
+}
+
+
+
+
+//============================================================
+//  network：获取本机所有启用的网络适配器 IP 和 MAC
+//============================================================
+//  思路：
+//      1. 枚举 Win32_NetworkAdapterConfiguration 所有实例
+//      2. 只保留 IPEnabled=true 的（启用的适配器）
+//      3. 提取 IPAddress 数组（过滤 0.0.0.0 和非 IPv4）
+//      4. 提取 MACAddress，格式化为标准 XX:XX:XX:XX:XX:XX
+//
+//  注意：
+//      WMI 返回的 IP 可能是字符串或数组，需分别处理。
+//      MAC 可能有连字符或冒号分隔，需统一处理。
+//============================================================
+network = function(){
+    import com.wmi;
+    var ips = {};
+    var macs = {};
+    var iter = ..com.wmi.eachProperties("Win32_NetworkAdapterConfiguration");
+    if(!iter) return {ips={"未获取"}; macs={"未获取"}};
+
+    for props, i in iter {
+        // 只采集启用的网络适配器
+        if(props[["IPEnabled"]]) {
+            // 提取 IP 列表
+            var ipList = props[["IPAddress"]];
+            if(..type(ipList) == "table") {
+                for j = 1; #ipList {
+                    var ip = ipList[j];
+                    if(ip && ..string.match(ip, "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") && ip != "0.0.0.0") {
+                        ..table.push(ips, ip);
+                    }
+                }
+            }
+            // 兼容 IPAddress 是单字符串的情况
+            elseif(..type(ipList) == "string" && ..string.match(ipList, "^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$") && ipList != "0.0.0.0") {
+                ..table.push(ips, ipList);
+            }
+
+            // 提取并格式化 MAC
+            var mac = props[["MACAddress"]];
+            if(mac && mac != "") {
+                // 提取所有十六进制片段并拼接
+                var hex = "";
+                for m in ..string.gmatch(mac, "[0-9A-Fa-f]+") {
+                    hex = hex ++ m;
+                }
+                if(#hex >= 12) {
+                    // 格式化为 XX:XX:XX:XX:XX:XX
+                    mac = ..string.upper(
+                        ..string.slice(hex,1,2) ++ ":" ++ ..string.slice(hex,3,4) ++ ":"
+                        ++ ..string.slice(hex,5,6) ++ ":" ++ ..string.slice(hex,7,8) ++ ":"
+                        ++ ..string.slice(hex,9,10) ++ ":" ++ ..string.slice(hex,11,12)
+                    );
+                }
+                ..table.push(macs, mac);
+            }
+        }
+    }
+    return {
+        ips = #ips > 0 ? ips : {"未获取"};
+        macs = #macs > 0 ? macs : {"未获取"};
+    };
+}
+
+
+
+
+//============================================================
+//  osver：获取操作系统版本
+//============================================================
+//  通过 WMI 查询 Win32_OperatingSystem 的 Caption 属性（如 "Windows 10 专业版"）。
+//============================================================
+osver = function(){
+    import com.wmi;
+    var props = ..com.wmi.getProperties("Win32_OperatingSystem");
+    if(!props) return "未获取";
+    return props[["Caption"]] || "未获取";
+}
+
+
+
+
+//============================================================
+//  pcId：获取计算机唯一编号
+//============================================================
+//  优先使用 BIOS 序列号；为空时回退到主板序列号。
+//  清理非字母数字字符，保留短横线。
+//============================================================
+pcId = function(){
+    import com.wmi;
+    // 优先从 BIOS 取
+    var sn = ..com.wmi.get("Win32_BIOS", "SerialNumber");
+    if(sn) {
+        var clean = ..string.match(sn, "^([a-zA-Z0-9%-]+)");
+        if(clean && #clean >= 3) return clean;
+    }
+    // 回退到主板序列号
+    sn = ..com.wmi.get("Win32_BaseBoard", "SerialNumber");
+    if(sn) {
+        var clean = ..string.match(sn, "^([a-zA-Z0-9%-]+)");
+        if(clean && #clean >= 3) return clean;
+    }
+    return "未获取";
+}
+
+
+
+
+//============================================================
+//  brand：获取计算机品牌（厂商+型号）
+//============================================================
+//  从 Win32_ComputerSystem 取 Manufacturer + Model。
+//  优先显示完整组合，去除前后空白。
+//============================================================
+brand = function(){
+    import com.wmi;
+    var props = ..com.wmi.getProperties("Win32_ComputerSystem");
+    if(!props) return "未获取";
+    var mfr = ..string.trim(props[["Manufacturer"]] || "");
+    var model = ..string.trim(props[["Model"]] || "");
+    if(mfr == "" && model == "") return "未获取";
+    if(mfr == "") return model;
+    if(model == "") return mfr;
+    return mfr ++ " " ++ model;
+}
+
+
+
+
+//============================================================
+//  software：识别办公软件和杀毒软件
+//============================================================
+//  核心思路：
+//      1. 枚举三个注册表路径，合并去重得到所有已安装程序
+//         - HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall
+//         - HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall
+//         - HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall（32 位程序在 64 位系统）
+//      2. 通过严格的 DisplayName 匹配识别办公软件和杀毒软件
+//      3. 通过多源回退确定最早安装日期
+//
+//  注册表关键字段：
+//      DisplayName        软件显示名
+//      DisplayVersion     版本号
+//      Publisher          发行商
+//      InstallDate        安装日期（8 位数字 YYYYMMDD）
+//      InstallLocation    安装目录
+//      SystemComponent    1=系统组件，0=普通软件
+//      ParentKeyName      父键名（C2R 子组件）
+//
+//  win.regReaderWow64(path) 说明：
+//      在 64 位 Windows 上打开 64 位注册表视图。
+//      默认的 win.regReader 在 64 位系统上读 32 位视图（WOW6432Node）。
+//      本函数参数 path 已经包含 WOW6432Node，不需要再嵌套。
+//============================================================
+software = function(){
+
+    //------------------------------------------------------------
+    //  辅助函数：枚举三个注册表路径，合并去重
+    //------------------------------------------------------------
+    //  返回值：键为 DisplayName（已 trim），值为完整记录对象
+    //  同一软件可能出现在多个路径下，保留最早的 InstallDate
+    //------------------------------------------------------------
+    var readAllUninstall = function(){
+        var all = {};
+        var paths = {
+            "HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+            "HKEY_CURRENT_USER\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall";
+            "HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall";
+        };
+        for p = 1; #paths {
+            var reg = ..win.regReaderWow64(paths[p]);
+            if(!reg) continue;  // 路径不存在时直接跳过
+            // eachKey 第二个返回值是子键的 FILETIME，可用于取创建时间
+            for k, writeTime in reg.eachKey() {
+                var r = reg.open(k, true);
+                if(!r) continue;
+                var name = r.queryValue("DisplayName");
+                if(!name) { r.close(); continue; }
+                // 读取关键字段
+                var sysComp = r.queryValue("SystemComponent");
+                var parentKey = r.queryValue("ParentKeyName");
+                var publisher = r.queryValue("Publisher") || "";
+                var installDate = r.queryValue("InstallDate") || "";
+                var installLocation = r.queryValue("InstallLocation") || "";
+                var displayVersion = r.queryValue("DisplayVersion") || "";
+                r.close();
+
+                name = ..string.trim(name);
+
+                // 同一软件出现在多路径时合并：保留最早的 installDate 和非空的 installLocation
+                if(all[name]) {
+                    if(installDate != "" && (all[name].installDate == "" || installDate < all[name].installDate)) {
+                        all[name].installDate = installDate;
+                    }
+                    if(installLocation != "" && all[name].installLocation == "") {
+                        all[name].installLocation = installLocation;
+                    }
+                }
+                else {
+                    all[name] = {
+                        id = k;
+                        name = name;
+                        version = ..string.trim(displayVersion);
+                        publisher = ..string.trim(publisher);
+                        systemComponent = (sysComp == 1);
+                        parentKey = parentKey;
+                        installDate = installDate;
+                        installLocation = installLocation;
+                        keyWriteTime = writeTime;  // FILETIME 类型
+                    };
+                }
+            }
+            reg.close();
+        }
+        return all;
+    };
+
+    var programs = readAllUninstall();
+
+
+    //------------------------------------------------------------
+    //  办公软件识别
+    //------------------------------------------------------------
+    //  识别策略：
+    //      1. 排除 SystemComponent=1（系统组件）
+    //      2. 排除 ParentKeyName 非空（C2R 子组件）
+    //      3. 排除已知子组件名称（白名单）
+    //      4. 排除包含子组件关键词的条目
+    //      5. 通过严格 DisplayName 匹配识别主程序
+    //
+    //  为什么不用 Publisher 匹配？
+    //      Microsoft 公司的非办公软件也会被识别，误判率高。
+    //      DisplayName 主名匹配更精准。
+    //------------------------------------------------------------
+
+    // 已知子组件白名单（出现在这里的一定不是主程序）
+    var officeNameBlacklist = {
+        ["Office 16 Click-to-Run Extensibility Component"] = true;
+        ["Office 16 Click-to-Run Localization Component"] = true;
+        ["Office 16 Click-to-Run Updating Component"] = true;
+        ["Office 16 Click-to-Run Performance Plugin"] = true;
+        ["Microsoft Office 16.0 Object Library"] = true;
+        ["Microsoft Office File Validation Add-In"] = true;
+        ["Microsoft Office 2013 组件"] = true;
+        ["Microsoft Office MUI"] = true;
+        ["Microsoft Office 语言包"] = true;
+        ["Office Software Protection Platform"] = true;
+        ["Microsoft 365 语言包"] = true;
+    }
+
+    // 通用子组件特征关键词（包含这些词的几乎都是子组件）
+    var componentKeywords = {"Click-to-Run"; "Extensibility"; "Localization"; "MUI"; "语言包"; "Object Library"; "File Validation"; "Performance Plugin"; "Service Pack"};
+
+    // 严格主名匹配函数
+    // 必须 DisplayName 命中下列产品主名才视为办公软件
+    var matchOfficeProduct = function(name){
+        var lower = ..string.lower(name);
+        // Microsoft 365 / Office 主程序（以这些开头）
+        if( ..string.find(lower, "microsoft 365") == 1 ) return true;
+        if( ..string.find(lower, "microsoft office") == 1 ) return true;
+        if( lower == "microsoft office 专业版" || lower == "microsoft office 标准版" ) return true;
+        // WPS 系列
+        if( ..string.find(lower, "wps office") == 1 || lower == "wps" ) return true;
+        // LibreOffice
+        if( ..string.find(lower, "libreoffice") == 1 ) return true;
+        return false;
+    };
+
+
+    //------------------------------------------------------------
+    //  杀毒软件识别
+    //------------------------------------------------------------
+    //  识别策略：
+    //      1. 精确匹配 DisplayName 白名单
+    //      2. 前缀匹配（覆盖带版本号的变体如"360安全卫士 V12"）
+    //      3. 排除 SystemComponent=1 和 ParentKeyName 非空
+    //      4. 排除包含子组件关键词的条目
+    //      5. 用 WMI SecurityCenter2 补充（杀软无日期）
+    //
+    //  为什么不用 Publisher 匹配？
+    //      Microsoft / Tencent 等公司有很多非杀软产品，误判率高。
+    //      DisplayName 匹配更精准可靠。
+    //------------------------------------------------------------
+
+    // 杀软精确名称白名单
+    var avProductNames = {
+        ["Windows Defender"] = true;
+        ["Microsoft Defender Antivirus"] = true;
+        ["Microsoft Security Essentials"] = true;
+        ["360 安全卫士"] = true;
+        ["360 杀毒"] = true;
+        ["360Safe"] = true;
+        ["360 Total Security"] = true;
+        ["腾讯电脑管家"] = true;
+        ["电脑管家"] = true;
+        ["QQ电脑管家"] = true;
+        ["火绒安全软件"] = true;
+        ["火绒"] = true;
+        ["Huorong"] = true;
+        ["奇安信天擎"] = true;
+        ["天擎"] = true;
+        ["奇安信"] = true;
+        ["深信服 EDR"] = true;
+        ["深信服"] = true;
+        ["Sangfor Endpoint Secure"] = true;
+        ["瑞星杀毒软件"] = true;
+        ["瑞星"] = true;
+        ["Rising Antivirus"] = true;
+        ["McAfee Total Protection"] = true;
+        ["McAfee AntiVirus"] = true;
+        ["McAfee Endpoint Security"] = true;
+        ["McAfee VirusScan"] = true;
+        ["McAfee"] = true;
+        ["Norton Security"] = true;
+        ["Norton 360"] = true;
+        ["Norton AntiVirus"] = true;
+        ["Norton Internet Security"] = true;
+        ["Norton"] = true;
+        ["Avast Free Antivirus"] = true;
+        ["Avast Premium Security"] = true;
+        ["Avast"] = true;
+        ["AVG AntiVirus"] = true;
+        ["AVG Internet Security"] = true;
+        ["AVG"] = true;
+        ["Kaspersky Internet Security"] = true;
+        ["Kaspersky Total Security"] = true;
+        ["Kaspersky Security Cloud"] = true;
+        ["Kaspersky Anti-Virus"] = true;
+        ["Kaspersky Endpoint Security"] = true;
+        ["Kaspersky"] = true;
+        ["ESET NOD32 Antivirus"] = true;
+        ["ESET Internet Security"] = true;
+        ["ESET Smart Security"] = true;
+        ["ESET Endpoint Security"] = true;
+        ["ESET"] = true;
+        ["Sophos Home"] = true;
+        ["Sophos Endpoint"] = true;
+        ["Sophos Anti-Virus"] = true;
+        ["Sophos"] = true;
+        ["Trend Micro OfficeScan"] = true;
+        ["Trend Micro Internet Security"] = true;
+        ["Trend Micro"] = true;
+        ["Bitdefender Antivirus Free"] = true;
+        ["Bitdefender Total Security"] = true;
+        ["Bitdefender Internet Security"] = true;
+        ["Bitdefender Antivirus"] = true;
+        ["Bitdefender Endpoint Security"] = true;
+        ["Bitdefender"] = true;
+        ["Avira Antivirus"] = true;
+        ["Avira Free Security"] = true;
+        ["Avira"] = true;
+        ["Panda Antivirus"] = true;
+        ["Panda Dome"] = true;
+        ["Panda"] = true;
+        ["Malwarebytes"] = true;
+        ["G DATA"] = true;
+        ["F-Secure"] = true;
+        ["Comodo Antivirus"] = true;
+        ["Comodo Internet Security"] = true;
+        ["Comodo"] = true;
+        ["Dr.Web"] = true;
+        ["DrWeb"] = true;
+        ["安恒信息"] = true;
+        ["绿盟科技"] = true;
+        ["NSFOCUS"] = true;
+        ["启明星辰"] = true;
+        ["Venustech"] = true;
+        ["2345安全卫士"] = true;
+        ["安全卫士-2345"] = true;
+    }
+
+    // 杀软前缀白名单（DisplayName 以这些开头即视为杀软）
+    // 覆盖带版本号的变体如"360安全卫士 V12"
+    var avPrefixes = {
+        "360 安全卫士"; "360 杀毒"; "360Safe"; "360 Total Security";
+        "腾讯电脑管家"; "QQ电脑管家"; "电脑管家";
+        "火绒安全软件"; "火绒"; "Huorong";
+        "奇安信天擎"; "天擎"; "奇安信";
+        "深信服"; "Sangfor";
+        "瑞星杀毒"; "瑞星"; "Rising";
+        "McAfee"; "Norton"; "Avast"; "AVG";
+        "Kaspersky"; "ESET"; "Sophos"; "Trend Micro"; "Bitdefender";
+        "Avira"; "Panda"; "Malwarebytes"; "G DATA"; "F-Secure"; "Comodo";
+        "Dr.Web"; "DrWeb";
+        "2345安全卫士"; "2345杀毒"; "2345";
+        "安全卫士 - 2345"; "安全卫士";
+        "Microsoft Defender"; "Microsoft Security Essentials"; "Windows Defender";
+        "安恒信息"; "绿盟科技"; "NSFOCUS"; "启明星辰"; "Venustech";
+    }
+
+    // 杀软子组件关键词（包含这些词的视为子组件，排除）
+    var avComponentBlacklist = {
+        ["Update"] = true; ["Updates"] = true; ["Updater"] = true;
+        ["Plugin"] = true; ["Plug-in"] = true; ["Extension"] = true;
+        ["Helper"] = true;
+        ["SDK"] = true; ["Tools"] = true; ["Console"] = true;
+        ["Localization"] = true; ["Language"] = true; ["Language Pack"] = true;
+        ["Driver"] = true; ["Drivers"] = true;
+        ["Crash"] = true; ["Reporter"] = true;
+        ["Uninstall"] = true; ["Setup"] = true;
+        ["Online"] = true; ["Offline"] = true; ["Web Scanner"] = true;
+        ["Boot"] = true; ["Rescue"] = true; ["Rescue Disk"] = true;
+    }
+
+
+    //------------------------------------------------------------
+    //  日期格式化与多源回退
+    //------------------------------------------------------------
+    //  为什么需要多源回退？
+    //      InstallDate 会被升级改写（如 Office 365 升级会变）。
+    //      注册表子键创建时间也不总是可靠（清理工具可能修改）。
+    //      但安装目录的创建时间通常不会被修改（升级只改文件不改目录）。
+    //  因此同时收集三个来源，取最早的作为真实安装日期。
+    //------------------------------------------------------------
+
+    // 把 InstallDate 字符串（YYYYMMDD 或 YYYY-MM-DD 等）格式化为 YYYY-MM-DD
+    var formatYmd = function(d){
+        if(!d || d == "") return "";
+        if(..type(d) == "number") d = ..tostring(d);
+        if(..type(d) == "string") {
+            d = ..string.trim(d);
+            // 标准 8 位数字格式 YYYYMMDD
+            // string.match 返回多个值（每个捕获组一个），用三个变量接收
+            var year, month, day = ..string.match(d, "^(\d{4})(\d{2})(\d{2})$");
+            if(year && month && day) {
+                var m = ..tonumber(month);
+                var dd = ..tonumber(day);
+                if(m >= 1 && m <= 12 && dd >= 1 && dd <= 31) {
+                    return year ++ "-" ++ month ++ "-" ++ day;
+                }
+            }
+            // 已经带分隔符的格式 YYYY-M-D 或 YYYY/M/D
+            var py, pm, pd = ..string.match(d, "^(\d{4})[-/](\d{1,2})[-/](\d{1,2})");
+            if(py && pm && pd) {
+                return py ++ "-" ++ ..string.format("%02d", ..tonumber(pm)) ++ "-" ++ ..string.format("%02d", ..tonumber(pd));
+            }
+        }
+        return "";
+    };
+
+    // 把注册表子键创建时间（FILETIME）转换为 YYYY-MM-DD
+    var formatFileTime = function(writeTime){
+        if(!writeTime) return "";
+        // fsys.time(FILETIME) 返回 time 对象，支持 .local(true) 转换到本地时区
+        var ft = ..fsys.time(writeTime);
+        if(!ft) return "";
+        var st = ft.local(true).toSystemTime();
+        if(!st || !st.year || ..tonumber(st.year) < 2000) return "";
+        return ..string.format("%04d-%02d-%02d", ..tonumber(st.year), ..tonumber(st.month), ..tonumber(st.day));
+    };
+
+    // 读取安装目录创建时间（目录在升级时通常不会被重建）
+    // 关键点（不要猜，必须看源码）：
+    //      1. fsys.getTime(path) 定义在 fsys/_.aardio，自动可用
+    //      2. fsys.fileInfo 不在 fsys 顶层，必须 import fsys.fileInfo 才可用
+    //      3. fsys.info(path) 返回 SHGetFileInfoW 结果，无 creationTime 字段
+    //      4. 返回的 tm.creation 已经是 time 对象，无需再包 fsys.time
+    var getLocationDate = function(path){
+        if(!path || #path == 0) return "";
+        if(!..io.exist(path)) return "";
+        var tm = ..fsys.getTime(path);
+        if(!tm || !tm.creation) return "";
+        var st = tm.creation;
+        if(!st || !st.year || ..tonumber(st.year) < 2000) return "";
+        return ..string.format("%04d-%02d-%02d", ..tonumber(st.year), ..tonumber(st.month), ..tonumber(st.day));
+    };
+
+    // 收集所有候选日期，取最早的
+    var collectDates = function(record){
+        var dates = {};
+        var d1 = formatYmd(record.installDate);
+        if(d1 != "") ..table.push(dates, d1);
+        var d2 = formatFileTime(record.keyWriteTime);
+        if(d2 != "") ..table.push(dates, d2);
+        var d3 = getLocationDate(record.installLocation);
+        if(d3 != "") ..table.push(dates, d3);
+        var earliest = "";
+        for i = 1; #dates {
+            if(earliest == "" || dates[i] < earliest) {
+                earliest = dates[i];
+            }
+        }
+        return earliest;
+    };
+
+
+    //------------------------------------------------------------
+    //  办公软件匹配
+    //------------------------------------------------------------
+    //  排除规则：
+    //      1. SystemComponent=1（系统组件）
+    //      2. ParentKeyName 非空（C2R 子组件）
+    //      3. 在 officeNameBlacklist 内的精确名称
+    //      4. 包含 componentKeywords 关键词的
+    //  通过 matchOfficeProduct() 精确识别主程序
+    //------------------------------------------------------------
+    var officeRecords = {};
+    var avRecords = {};
+
+    for k, v in programs {
+        if(v.systemComponent) continue;
+        if(v.parentKey && #v.parentKey > 0) continue;
+        if(officeNameBlacklist[v.name] === true) continue;
+        // 检查是否包含子组件关键词
+        var isComponent = false;
+        for i = 1; #componentKeywords {
+            if(..string.find(v.name, componentKeywords[i])) {
+                isComponent = true;
+                break;
+            }
+        }
+        if(isComponent) continue;
+        // 精确匹配主程序名
+        if(!matchOfficeProduct(v.name)) continue;
+        ..table.push(officeRecords, v);
+    }
+
+
+    //------------------------------------------------------------
+    //  杀毒软件匹配
+    //------------------------------------------------------------
+    //  排除规则：
+    //      1. SystemComponent=1
+    //      2. ParentKeyName 非空
+    //      3. 包含 avComponentBlacklist 关键词的
+    //  通过 matchAvProduct() 识别（精确匹配 + 前缀匹配）
+    //------------------------------------------------------------
+    var matchAvProduct = function(name){
+        if(avProductNames[name]) return true;
+        for i = 1; #avPrefixes {
+            if(..string.find(name, avPrefixes[i]) == 1) return true;
+        }
+        return false;
+    };
+    for k, v in programs {
+        if(v.systemComponent) continue;
+        if(v.parentKey && #v.parentKey > 0) continue;
+        if(!matchAvProduct(v.name)) continue;
+        // 排除子组件
+        var isComponent = false;
+        for word, _ in avComponentBlacklist {
+            if(..string.find(v.name, " " ++ word ++ " ") || ..string.find(v.name, " " ++ word)) {
+                isComponent = true;
+                break;
+            }
+        }
+        if(isComponent) continue;
+        ..table.push(avRecords, v);
+    }
+
+
+    //------------------------------------------------------------
+    //  WMI 补充杀软识别
+    //------------------------------------------------------------
+    //  Windows 安全中心会注册所有杀软到 WMI namespace "root\SecurityCenter2"。
+    //  即便用户卸载了杀软但未重启，或杀软在注册表没正确写入，都能补上。
+    //  WMI 来源没有日期字段，只有 displayName。
+    //------------------------------------------------------------
+    import com.wmi;
+    var iter = ..com.wmi.eachProperties("AntiVirusProduct", "root\SecurityCenter2");
+    if(iter) {
+        for props, i in iter {
+            var displayName = props[["displayName"]];
+            if(!displayName || displayName == "") continue;
+            // 去重：已在 avRecords 中则跳过
+            var exists = false;
+            for j = 1; #avRecords {
+                if(..string.lower(avRecords[j].name) == ..string.lower(displayName)) {
+                    exists = true;
+                    break;
+                }
+            }
+            if(!exists) {
+                // 补充条目无日期信息
+                ..table.push(avRecords, {
+                    name = displayName;
+                    installDate = "";
+                    keyWriteTime = null;
+                    installLocation = "";
+                });
+            }
+        }
+    }
+
+
+    //------------------------------------------------------------
+    //  拼装最终结果
+    //------------------------------------------------------------
+    //  输出格式：
+    //      office:       "Microsoft 365 企业应用版 - zh-cn 16.0.20131.20126"
+    //      officeDate:   "2025-02-05"
+    //      antivirus:    "火绒安全软件 6.0.11.1"
+    //      avDate:       "2026-02-06"
+    //  多个软件用分号分隔
+    //------------------------------------------------------------
+    var nameWithVersion = function(rec){
+        if(rec.version && rec.version != "") return rec.name ++ " " ++ rec.version;
+        return rec.name;
+    };
+
+    var office = {};
+    var finalOfficeDate = {};
+    for i = 1; #officeRecords {
+        var rec = officeRecords[i];
+        var name = nameWithVersion(rec);
+        var date = collectDates(rec);
+        ..table.push(office, name);
+        ..table.push(finalOfficeDate, date);
+    }
+
+    var antivirus = {};
+    var finalAvDate = {};
+    for i = 1; #avRecords {
+        var rec = avRecords[i];
+        var name = nameWithVersion(rec);
+        var date = collectDates(rec);
+        ..table.push(antivirus, name);
+        ..table.push(finalAvDate, date);
+    }
+
+    // 清理后的字符串拼接（过滤空字符串和分隔符本身）
+    var cleanJoined = function(parts, sep){
+        if(#parts == 0) return "";
+        var valid = {};
+        for i = 1; #parts {
+            var s = ..string.trim(..tostring(parts[i]));
+            if(s != "" && s != sep) ..table.push(valid, s);
+        }
+        return #valid > 0 ? ..string.join(valid, sep) : "";
+    };
+
+    var result = {
+        office = #office > 0 ? ..string.join(office, ";") : "未获取";
+        officeDate = #cleanJoined(finalOfficeDate, ";") > 0 ? cleanJoined(finalOfficeDate, ";") : "未获取";
+        antivirus = #antivirus > 0 ? ..string.join(antivirus, ";") : "未获取";
+        avDate = #cleanJoined(finalAvDate, ";") > 0 ? cleanJoined(finalAvDate, ";") : "未获取";
+    };
+    return result;
+}
+
+
+
+
+//============================================================
+//  memory：获取物理内存条信息
+//============================================================
+//  通过 WMI 查询 Win32_PhysicalMemory。
+//  返回：数组，每个元素是 {model=..., size=...}
+//  容量计算：Capacity 单位是字节，除以 1024^3 转为 GB
+//============================================================
+memory = function(){
+    import com.wmi;
+    var memories = {};
+    var iter = ..com.wmi.eachProperties("Win32_PhysicalMemory");
+    if(!iter) return {{model="未获取"; size="未获取"}};
+
+    for props, i in iter {
+        var manufacturer = props[["Manufacturer"]] || "未知";
+        var capacity = ..tonumber(props[["Capacity"]]) || 0;
+        var speed = props[["Speed"]] || "";
+        // 字节转 GB，四舍五入
+        var sizeGb = ..math.floor(capacity / 1024 / 1024 / 1024 + 0.5);
+        manufacturer = ..string.trim(manufacturer);
+        // 显示格式：Kingston DDR3200  16 GB
+        var model = manufacturer ++ (speed ? (" DDR" ++ ..tostring(speed)) : "");
+        ..table.push(memories, {model=model; size=..tostring(sizeGb) ++ " GB"});
+    }
+
+    if(#memories == 0) return {{model="未获取"; size="未获取"}};
+    return memories;
+}
+
+
+
+
+//============================================================
+//  disk：获取硬盘信息
+//============================================================
+//  通过 WMI 查询 Win32_DiskDrive。
+//  返回：数组，每个元素是 {model=..., size=..., serial=...}
+//  容量显示：>=1000 GB 显示为 TB，否则显示为 GB
+//============================================================
+disk = function(){
+    import com.wmi;
+    var disks = {};
+    var iter = ..com.wmi.eachProperties("Win32_DiskDrive");
+    if(!iter) return {{model="未获取"; size="未获取"; serial="未获取"}};
+
+    for props, i in iter {
+        var model = props[["Model"]] || "未知";
+        var size = ..tonumber(props[["Size"]]) || 0;
+        var serial = props[["SerialNumber"]] || "未获取";
+        var sizeGb = size / 1024 / 1024 / 1024;
+        var sizeStr;
+        if(sizeGb >= 1000) {
+            sizeStr = ..string.format("%.1f TB", sizeGb / 1024);
+        }
+        else {
+            sizeStr = ..string.format("%.0f GB", sizeGb);
+        }
+        model = ..string.trim(model);
+        serial = ..string.trim(serial);
+        // 清理序列号中的非字母数字字符（部分硬盘序列号有空格或乱码）
+        var cleanSerial = ..string.match(serial, "^([a-zA-Z0-9%-]+)");
+        if(cleanSerial && #cleanSerial >= 3) serial = cleanSerial;
+        ..table.push(disks, {model=model; size=sizeStr; serial=serial});
+    }
+
+    if(#disks == 0) return {{model="未获取"; size="未获取"; serial="未获取"}};
+    return disks;
+}
+
+
+
+
+//============================================================
+//  all：一站式采集所有硬件信息
+//============================================================
+//  供 main.aardio 在子线程中调用。
+//  返回合并后的结果表。
+//
+//  防御性编程：每个子函数都返回合理默认值（如"未获取"），无需 try/catch。
+//============================================================
+all = function(){
+    import com.wmi;
+    import sys.installed;
+
+    var result = {};
+
+    result.hostname = hostname();
+
+    var net = network();
+    result.ips = net ? net.ips : {"未获取"};
+    result.macs = net ? net.macs : {"未获取"};
+
+    result.osver = osver();
+    result.pcId = pcId();
+    result.pcBrand = brand();
+
+    var sw = software();
+    result.office = sw ? sw.office : "未获取";
+    result.officeDate = sw ? sw.officeDate : "未获取";
+    result.antivirus = sw ? sw.antivirus : "未获取";
+    result.avDate = sw ? sw.avDate : "未获取";
+
+    result.memories = memory();
+    result.disks = disk();
+
+    return result;
+}
