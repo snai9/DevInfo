@@ -7,13 +7,7 @@ defaultUrls = {"http://10.44.179.88:8080";"http://10.130.175.88:8080";"http://12
 
 load = function(){
 	var path = ..io.appData("hwinfo/config.json");
-	var cfg;
-	try {
-		cfg = ..JSON.load(path);
-	}
-	catch(e) {
-		cfg = null;
-	}
+	var cfg = ..io.exist(path) && ..JSON.load(path);
 	if(!cfg) return {used=""; unit=""; dept=""; serverUrls=defaultUrls; activeUrl=""};
 	if(!cfg.used) cfg.used = "";
 	if(!cfg.unit) cfg.unit = "";

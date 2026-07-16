@@ -9,15 +9,7 @@ send = function(data, serverUrl){
 	
 	var jsonStr = ..JSON.stringify(data);
 	var headers = "Content-Type: application/json\r\n";
-	var result;
-	try {
-		result = http.post(serverUrl ++ "/api/upload", jsonStr, headers);
-	}
-	catch(e) {
-		http.close();
-		return {code=-1; msg="上传失败：" ++ tostring(e)};
-	}
-	
+	var result = http.post(serverUrl ++ "/api/upload", jsonStr, headers);
 	var statusCode = http.statusCode;
 	http.close();
 	
@@ -56,14 +48,7 @@ send = function(data, serverUrl){
 ping = function(serverUrl){
 	var http = ..inet.http("hwinfo-ping", false);
 	http.setTimeouts(5000, 5000, 5000);
-	var result;
-	try {
-		result = http.post(serverUrl ++ "/api/ping", "{}", "Content-Type: application/json\r\n");
-	}
-	catch(e) {
-		http.close();
-		return false;
-	}
+	http.post(serverUrl ++ "/api/ping", "{}", "Content-Type: application/json\r\n");
 	var statusCode = http.statusCode;
 	http.close();
 	return statusCode && statusCode >= 200 && statusCode < 300;

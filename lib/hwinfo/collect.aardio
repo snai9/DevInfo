@@ -1,5 +1,8 @@
 import com.wmi;
 import sys.installed;
+import win.reg;
+import fsys.time;
+import fsys;
 
 namespace hwinfo.collect;
 
@@ -83,13 +86,6 @@ brand = function(){
 }
 
 software = function(){
-	import win.reg;
-	import fsys.time;
-	import fsys;
-
-	// 第一步：从 Uninstall 注册表直接枚举（权威源）
-	// 按 DisplayName 去重：同名程序保留最早的 InstallDate（升级会在不同路径产生新条目，
-	// 但原始安装日期的条目通常保留在最早的路径中）
 	var readAllUninstall = function(){
 		var all = {};
 		var paths = {
@@ -116,11 +112,9 @@ software = function(){
 				name = ..string.trim(name);
 
 				if(all[name]) {
-					// 保留更早的 InstallDate（字符串比较 YYYYMMDD 就是时间顺序）
 					if(installDate != "" && (all[name].installDate == "" || installDate < all[name].installDate)) {
 						all[name].installDate = installDate;
 					}
-					// 保留非空的 InstallLocation
 					if(installLocation != "" && all[name].installLocation == "") {
 						all[name].installLocation = installLocation;
 					}
@@ -336,11 +330,9 @@ software = function(){
 	var getLocationDate = function(path){
 		if(!path || #path == 0) return "";
 		if(!..io.exist(path)) return "";
-		var info = ..fsys.info(path);
-		if(!info || !info.creationTime) return "";
-		var ft = ..fsys.time(info.creationTime);
-		if(!ft) return "";
-		var st = ft.local(true).toSystemTime();
+		var tm = ..fsys.getTime(path);
+		if(!tm || !tm.creation) return "";
+		var st = tm.creation;
 		if(!st || !st.year || ..tonumber(st.year) < 2000) return "";
 		return ..string.format("%04d-%02d-%02d", ..tonumber(st.year), ..tonumber(st.month), ..tonumber(st.day));
 	};
@@ -354,7 +346,6 @@ software = function(){
 		if(d2 != "") ..table.push(dates, d2);
 		var d3 = getLocationDate(record.installLocation);
 		if(d3 != "") ..table.push(dates, d3);
-		// 取最早日期
 		var earliest = "";
 		for i = 1; #dates {
 			if(earliest == "" || dates[i] < earliest) {
@@ -438,15 +429,21 @@ software = function(){
 	var office = {};
 	var finalOfficeDate = {};
 	for i = 1; #officeRecords {
-		..table.push(office, nameWithVersion(officeRecords[i]));
-		..table.push(finalOfficeDate, collectDates(officeRecords[i]));
+		var rec = officeRecords[i];
+		var name = nameWithVersion(rec);
+		var date = collectDates(rec);
+		..table.push(office, name);
+		..table.push(finalOfficeDate, date);
 	}
 
 	var antivirus = {};
 	var finalAvDate = {};
 	for i = 1; #avRecords {
-		..table.push(antivirus, nameWithVersion(avRecords[i]));
-		..table.push(finalAvDate, collectDates(avRecords[i]));
+		var rec = avRecords[i];
+		var name = nameWithVersion(rec);
+		var date = collectDates(rec);
+		..table.push(antivirus, name);
+		..table.push(finalAvDate, date);
 	}
 
 	var cleanJoined = function(parts, sep){
@@ -459,12 +456,13 @@ software = function(){
 		return #valid > 0 ? ..string.join(valid, sep) : "";
 	};
 
-	return {
+	var result = {
 		office = #office > 0 ? ..string.join(office, ";") : "未获取";
 		officeDate = #cleanJoined(finalOfficeDate, ";") > 0 ? cleanJoined(finalOfficeDate, ";") : "未获取";
 		antivirus = #antivirus > 0 ? ..string.join(antivirus, ";") : "未获取";
 		avDate = #cleanJoined(finalAvDate, ";") > 0 ? cleanJoined(finalAvDate, ";") : "未获取";
 	};
+	return result;
 }
 
 memory = function(){
