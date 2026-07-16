@@ -51,12 +51,12 @@ lblOsver={cls="static";text="操作系统：";left=24;top=96;right=110;bottom=11
 lblPcBrand={cls="static";text="计算机品牌：";left=24;top=126;right=110;bottom=144;bgcolor=0xE0F0F8;color=0x666666;z=30};
 lblPcId={cls="static";text="计算机编号：";left=24;top=156;right=110;bottom=174;bgcolor=0xE0F0F8;color=0x666666;z=31};
 lblUsed={cls="static";text="使用人：";left=16;top=12;right=80;bottom=32;bgcolor=0xE0F0F8;color=0x666666;font=LOGFONT(h=-14);z=2};
-statusIcon={cls="bkplus";text='\uF058';left=10;top=668;right=30;bottom=688;color=0x0B86B8;db=1;dl=1;font=LOGFONT(h=-14;name='FontAwesome');z=36};
-statusLine={cls="bkplus";left=0;top=660;right=600;bottom=662;bgcolor=0xD4A846;db=1;dl=1;dr=1;z=40};
-statusServerIcon={cls="bkplus";text='\uF233';left=340;top=668;right=360;bottom=688;color=0x999999;db=1;font=LOGFONT(name='FontAwesome');z=38};
-statusServerText={cls="bkplus";text="未连接";left=362;top=668;right=470;bottom=688;align="left";color=0x999999;db=1;z=41};
-statusText={cls="bkplus";text="就绪";left=34;top=668;right=340;bottom=688;align="left";color=0x666666;db=1;dl=1;z=37};
-statusTime={cls="bkplus";text="--:--:--";left=472;top=668;right=590;bottom=688;align="right";color=0x999999;db=1;dr=1;z=39};
+statusIcon={cls="bkplus";text='\uF058';left=10;top=668;right=30;bottom=688;color=0x0B86B8;db=1;dl=1;font=LOGFONT(h=-14;name='FontAwesome');z=35};
+statusLine={cls="bkplus";left=0;top=660;right=600;bottom=662;bgcolor=0xD4A846;db=1;dl=1;dr=1;z=39};
+statusServerIcon={cls="bkplus";text='\uF233';left=340;top=668;right=360;bottom=688;color=0x999999;db=1;font=LOGFONT(name='FontAwesome');z=37};
+statusServerText={cls="bkplus";text="未连接";left=362;top=668;right=470;bottom=688;align="left";color=0x999999;db=1;z=40};
+statusText={cls="bkplus";text="就绪";left=34;top=668;right=340;bottom=688;align="left";color=0x666666;db=1;dl=1;z=36};
+statusTime={cls="bkplus";text="--:--:--";left=472;top=668;right=590;bottom=688;align="right";color=0x999999;db=1;dr=1;z=38};
 txtAntivirus={cls="static";left=116;top=346;right=580;bottom=364;bgcolor=0xE0F0F8;color=0x666666;z=14};
 txtAvDate={cls="static";left=116;top=372;right=580;bottom=390;bgcolor=0xE0F0F8;color=0x666666;z=32};
 txtDisk={cls="edit";left=24;top=548;right=576;bottom=598;bgcolor=0xE0F0F8;color=0x666666;multiline=1;readonly=1;vscroll=1;z=21};
@@ -97,17 +97,13 @@ var setServerStatus = function(connected){
 	mainForm.statusServerText.redraw();
 };
 
-
-
-
-var initTime = time();
-mainForm.statusTime.text = string.format("%04d-%02d-%02d %02d:%02d:%02d", initTime.year, initTime.month, initTime.day, initTime.hour, initTime.minute, initTime.second);
-
-mainForm.setStatusTimer = mainForm.setInterval(1000, function(){
-	var t = time();
-	mainForm.statusTime.text = string.format("%04d-%02d-%02d %02d:%02d:%02d", t.year, t.month, t.day, t.hour, t.minute, t.second);
-	mainForm.statusTime.redraw();
-});
+ var updateTime = function(){
+    var t = time();
+    mainForm.statusTime.text = tostring(t);
+    mainForm.statusTime.redraw();
+};
+updateTime();  // 立即执行一次
+mainForm.setStatusTimer = mainForm.setInterval(updateTime, 1000);
 
 
 
