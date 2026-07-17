@@ -1,0 +1,289 @@
+// data_注释.aardio —— hwserver.data 数据服务层（带详细注释版）
+// 功能：硬件信息的增删改查、序列化、去重、搜索等数据操作
+// 所有数据库操作都通过 db 参数传入，本模块不持有数据库连接
+
+import sqlite;   // SQLite 数据库操作
+import time;     // 时间格式化
+import string;   // 字符串处理
+import JSON;     // JSON 编解码
+
+namespace hwserver.data;
+
+// ========== 序列化辅助函数 ==========
+// 将各种格式的字段数据统一转为字符串，便于存储和展示
+
+// IP 地址序列化：字符串直接返回，数组用逗号拼接
+serializeIps = function(ips){
+	if(..type(ips) == "string") return ips;
+	if(..type(ips) == "table") return ..string.join(ips, ", ");
+	return "";
+}
+
+// MAC 地址序列化：同 IP 处理逻辑
+serializeMacs = function(macs){
+	if(..type(macs) == "string") return macs;
+	if(..type(macs) == "table") return ..string.join(macs, ", ");
+	return "";
+}
+
+// 内存信息序列化：每个内存条是 {model=..., size=...} 的表
+// 拼接为 "型号 容量"，多条用 \r\n 分隔（edit 控件换行需要 \r\n）
+serializeMemories = function(memories){
+	if(..type(memories) == "string") return memories;
+	if(..type(memories) == "table") {
+		var parts = {};
+		for i = 1; #memories {
+			var m = memories[i];
+			if(..type(m) == "table") {
+				// 每条内存：型号 + 空格 + 容量
+				..table.push(parts, (m[["model"]] || "") ++ " " ++ (m[["size"]] || ""));
+			}
+			else {
+				// 非表类型直接转字符串
+				..table.push(parts, ..tostring(m));
+			}
+		}
+		return ..string.join(parts, '\r\n');
+	}
+	return "";
+}
+
+// 硬盘信息序列化：每个硬盘是 {model=..., size=..., serial=...} 的表
+// 拼接为 "型号 容量 序列号"，多块用 \r\n 分隔
+serializeDisks = function(disks){
+	if(..type(disks) == "string") return disks;
+	if(..type(disks) == "table") {
+		var parts = {};
+		for i = 1; #disks {
+			var d = disks[i];
+			if(..type(d) == "table") {
+				..table.push(parts, (d[["model"]] || "") ++ " " ++ (d[["size"]] || "") ++ " " ++ (d[["serial"]] || ""));
+			}
+			else {
+				..table.push(parts, ..tostring(d));
+			}
+		}
+		return ..string.join(parts, '\r\n');
+	}
+	return "";
+}
+
+// ========== 核心业务函数 ==========
+
+// 插入记录（含数据校验 + 全字段去重）
+// 参数：db - 数据库连接对象，data - 客户端上传的硬件信息表
+// 返回：{code=0/1/-1, msg="..."}  0=成功 1=已存在 -1=校验失败
+insert = function(db, data){
+	// 必填字段校验
+	if(!data[["used"]] or ..string.trim(data[["used"]]) == "") {
+		return {code=-1; msg="数据校验失败：使用人姓名不能为空"};
+	}
+	if(!data[["unit"]] or ..string.trim(data[["unit"]]) == "") {
+		return {code=-1; msg="数据校验失败：单位不能为空"};
+	}
+	if(!data[["dept"]] or ..string.trim(data[["dept"]]) == "") {
+		return {code=-1; msg="数据校验失败：部门及位置不能为空"};
+	}
+	if(!data[["hostname"]] or ..string.trim(data[["hostname"]]) == "") {
+		return {code=-1; msg="数据校验失败：计算机名不能为空"};
+	}
+	
+	// 构造标准化记录（trim + 序列化 + 空值兜底）
+	var record = {};
+	record.used = ..string.trim(data[["used"]]);
+	record.unit = ..string.trim(data[["unit"]]);
+	record.dept = ..string.trim(data[["dept"]]);
+	record.pcId = data[["pcId"]] || "";          // 计算机编号/SN号（WMI自动采集）
+	record.hostname = ..string.trim(data[["hostname"]]);
+	record.ips = serializeIps(data[["ips"]]);      // IP地址序列化
+	record.macs = serializeMacs(data[["macs"]]);   // MAC地址序列化
+	record.osver = data[["osver"]] || "";          // 操作系统版本
+	record.pcBrand = data[["pcBrand"]] || "";      // 计算机品牌
+	record.office = data[["office"]] || "";        // 办公软件及版本号
+	record.officeDate = data[["officeDate"]] || "";// 办公软件安装日期
+	record.antivirus = data[["antivirus"]] || "";  // 杀毒软件及版本号
+	record.avDate = data[["avDate"]] || "";        // 杀毒软件安装日期
+	record.memories = serializeMemories(data[["memories"]]); // 内存序列化
+	record.disks = serializeDisks(data[["disks"]]);         // 硬盘序列化
+	
+	// 生成上传时间戳
+	var now = ..time();
+	var uploadTime = ..string.format("%04d-%02d-%02d %02d:%02d:%02d",
+		now.year, now.month, now.day, now.hour, now.minute, now.second);
+	
+	// 全字段去重检查（15个业务字段全部相同才视为重复）
+	db.beginTrans();
+	var row = db.stepQuery(
+		"SELECT COUNT(*) as cnt FROM hwinfo WHERE used=? AND unit=? AND dept=? AND pcId=? AND hostname=? AND ips=? AND macs=? AND osver=? AND pcBrand=? AND office=? AND officeDate=? AND antivirus=? AND avDate=? AND memories=? AND disks=?",
+		{record.used; record.unit; record.dept; record.pcId; record.hostname; record.ips; record.macs; record.osver; record.pcBrand; record.office; record.officeDate; record.antivirus; record.avDate; record.memories; record.disks}
+	);
+	var cnt = row ? ..tonumber(row[["cnt"]]) : 0;
+	
+	// 已存在则返回 code=1（非错误，仅提示）
+	if(cnt > 0) {
+		db.commitTrans();
+		return {code=1; msg="记录已存在"};
+	}
+	
+	// 插入新记录（用 sqlite.escape 防注入，db.exec 不支持 ? 占位符）
+	var sql = "INSERT INTO hwinfo (used,unit,dept,pcId,hostname,ips,macs,osver,pcBrand,office,officeDate,antivirus,avDate,memories,disks,uploadTime) VALUES ("
+		++ ..sqlite.escape(record.used) ++ ","
+		++ ..sqlite.escape(record.unit) ++ ","
+		++ ..sqlite.escape(record.dept) ++ ","
+		++ ..sqlite.escape(record.pcId) ++ ","
+		++ ..sqlite.escape(record.hostname) ++ ","
+		++ ..sqlite.escape(record.ips) ++ ","
+		++ ..sqlite.escape(record.macs) ++ ","
+		++ ..sqlite.escape(record.osver) ++ ","
+		++ ..sqlite.escape(record.pcBrand) ++ ","
+		++ ..sqlite.escape(record.office) ++ ","
+		++ ..sqlite.escape(record.officeDate) ++ ","
+		++ ..sqlite.escape(record.antivirus) ++ ","
+		++ ..sqlite.escape(record.avDate) ++ ","
+		++ ..sqlite.escape(record.memories) ++ ","
+		++ ..sqlite.escape(record.disks) ++ ","
+		++ ..sqlite.escape(uploadTime) ++ ")";
+	db.exec(sql);
+	db.commitTrans();
+	return {code=0; msg="上传成功"};
+}
+
+// 查询全部记录，支持按单位筛选
+// 参数：db - 数据库连接，unit - 单位名（空/"全部"表示不限）
+// 返回：{code=0, data=行数组}
+queryAll = function(db, unit){
+	var sql;
+	var rows;
+	if(unit && unit != "" && unit != "全部") {
+		// 按单位筛选
+		rows = db.getTable("SELECT * FROM hwinfo WHERE unit=" ++ ..sqlite.escape(unit) ++ " ORDER BY uploadTime DESC");
+	}
+	else {
+		// 查全部
+		rows = db.getTable("SELECT * FROM hwinfo ORDER BY uploadTime DESC");
+	}
+	if(!rows) return {code=0; data={}};
+	return {code=0; data=rows};
+}
+
+// 获取所有不重复的单位名（用于下拉筛选框）
+getUnits = function(db){
+	var rows = db.getTable("SELECT DISTINCT unit FROM hwinfo WHERE unit != '' ORDER BY unit");
+	if(!rows) return {};
+	var units = {};
+	for i = 1; #rows {
+		..table.push(units, rows[i][["unit"]]);
+	}
+	return units;
+}
+
+// 允许编辑的字段白名单（防止把自由文本拼成列名造成SQL注入）
+_editableFields = {
+	used = true;
+	unit = true;
+	dept = true;
+	pcId = true;
+	hostname = true;
+	ips = true;
+	macs = true;
+	osver = true;
+	pcBrand = true;
+	office = true;
+	officeDate = true;
+	antivirus = true;
+	avDate = true;
+	memories = true;
+	disks = true;
+}
+
+// 关键词搜索列（11个字段模糊搜索）
+_searchFields = {
+	"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"antivirus"
+}
+
+// 按 ID 取单条记录（用于编辑弹窗回填数据）
+getById = function(db, id){
+	id = ..tonumber(id);
+	if(!db || !id) return null;
+	return db.stepQuery("SELECT * FROM hwinfo WHERE id=?", {id});
+}
+
+// 单位 + 关键词组合筛选，返回行数组（失败返回空数组）
+// 参数：db, unit - 单位筛选, keyword - 关键词（在_searchFields列中LIKE搜索）
+search = function(db, unit, keyword){
+	if(!db) return {};
+	
+	var where = {};
+	// 单位条件
+	if(unit && unit != "" && unit != "全部") {
+		..table.push(where, "unit=" ++ ..sqlite.escape(unit));
+	}
+	
+	// 关键词条件：在搜索列中 OR 模糊匹配
+	if(keyword && ..string.trim(keyword) != "") {
+		var kw = "%" ++ ..string.trim(keyword) ++ "%";
+		var orParts = {};
+		for i = 1; #_searchFields {
+			..table.push(orParts, _searchFields[i] ++ " LIKE " ++ ..sqlite.escape(kw));
+		}
+		..table.push(where, "(" ++ ..string.join(orParts, " OR ") ++ ")");
+	}
+	
+	// 拼接 SQL
+	var sql = "SELECT * FROM hwinfo";
+	if(#where > 0) sql = sql ++ " WHERE " ++ ..string.join(where, " AND ");
+	sql = sql ++ " ORDER BY uploadTime DESC";
+	
+	var rows = db.getTable(sql);
+	return rows || {};
+}
+
+// 批量/多字段更新，fields 为 {fieldName=value, ...}
+// 仅更新白名单内的字段，防SQL注入
+update = function(db, id, fields){
+	id = ..tonumber(id);
+	if(!db || !id || !fields) {
+		return {code=-1; msg="参数错误"};
+	}
+	
+	var parts = {};
+	for k, v in fields {
+		// 白名单校验：只允许 _editableFields 中定义的字段
+		if(_editableFields[k]) {
+			..table.push(parts, k ++ "=" ++ ..sqlite.escape(v));
+		}
+	}
+	if(#parts == 0) {
+		return {code=-1; msg="没有可更新字段"};
+	}
+	
+	var sql = "UPDATE hwinfo SET " ++ ..string.join(parts, ",") ++ " WHERE id=" ++ id;
+	db.exec(sql);
+	return {code=0; msg="更新成功"};
+}
+
+// 单字段更新（用于虚表内联编辑）
+// 先做白名单校验，再委托给 update 函数
+updateField = function(db, id, field, value){
+	if(!_editableFields[field]) {
+		return {code=-1; msg="字段不可编辑"};
+	}
+	var t = {};
+	t[field] = value;
+	return update(db, id, t);
+}
+
+// 按 ID 数组批量删除，返回成功删除的条数
+deleteByIds = function(db, ids){
+	if(!db || !ids || #ids == 0) return 0;
+	
+	var count = 0;
+	for i = 1; #ids {
+		var id = ..tonumber(ids[i]);
+		if(id) {
+			db.exec("DELETE FROM hwinfo WHERE id=" ++ id);
+			count++;
+		}
+	}
+	return count;
+}

@@ -1,0 +1,68 @@
+// log_注释.aardio —— hwserver.log 操作日志模块（带详细注释版）
+// 功能：服务端操作日志的写入和读取
+// 注意：命名空间成员名不能用 error（aardio内置常量），改用 err
+
+import io;       // 文件操作
+import string;   // 字符串处理
+import time;     // 时间格式化
+
+namespace hwserver.log;
+
+// 日志文件路径：保存在 %LocalAppData%/hwinfo/server.log
+var logPath = ..io.appData("hwinfo/server.log");
+
+// 核心写入函数
+// 参数：level - 日志级别（INFO/WARN/ERROR），action - 操作名，detail - 详细信息
+write = function(level, action, detail){
+	// 格式化时间戳
+	var now = ..time();
+	var ts = ..string.format("%04d-%02d-%02d %02d:%02d:%02d",
+		now.year, now.month, now.day, now.hour, now.minute, now.second);
+	// 拼接日志行：[时间] [级别] 操作 — 详情
+	var line = "[" ++ ts ++ "] [" ++ level ++ "] " ++ action;
+	if(detail && detail != "") line = line ++ " — " ++ detail;
+	line = line ++ '\r\n';
+	// 追加写入日志文件（第3个参数 true 表示追加模式）
+	..string.save(logPath, line, true);
+}
+
+// INFO 级别日志
+info = function(action, detail){
+	write("INFO", action, detail || "");
+}
+
+// WARN 级别日志
+warn = function(action, detail){
+	write("WARN", action, detail || "");
+}
+
+// ERROR 级别日志
+// 注意：函数名用 err 而非 error，因为 error 是 aardio 内置全局常量（陷阱56/59）
+err = function(action, detail){
+	write("ERROR", action, detail || "");
+}
+
+// 读取最近 N 行日志（用于日志查看界面）
+// 参数：maxLines - 最大行数，默认200
+readRecent = function(maxLines){
+	maxLines = maxLines || 200;
+	var str = ..string.load(logPath);
+	if(!str || str == "") return "";
+	var lines = ..string.split(str, '\n');
+	var total = #lines;
+	if(total <= maxLines) return str;
+	// 取最后 maxLines 行
+	var start = total - maxLines + 1;
+	var recent = {};
+	for i = start; total {
+		if(lines[i] && ..string.trim(lines[i]) != "") {
+			..table.push(recent, lines[i]);
+		}
+	}
+	return ..string.join(recent, '\n');
+}
+
+// 清空日志文件
+clear = function(){
+	..string.save(logPath, "");
+}
