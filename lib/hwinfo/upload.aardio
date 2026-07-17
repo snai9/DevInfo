@@ -1,53 +1,96 @@
-import inet.http;
-import JSON;
+import web.rest.jsonClient;
 
 namespace hwinfo.upload;
 
-var extractErrMsg = function(result, defaultMsg){
-	if(type(result) == "string") {
-		var resp = ..JSON.tryParse(result);
-		if(resp && resp[["msg"]]) return resp[["msg"]];
+var createClient = function(userAgent, connectMs, sendMs, receiveMs){
+	var http = ..web.rest.jsonClient(userAgent || "hwinfo-client");
+	http.setTimeouts(
+		connectMs || 10000,
+		sendMs || 10000,
+		receiveMs || 10000
+	);
+	return http;
+};
+
+var extractErrMsg = function(http, defaultMsg){
+	// 优先拿已解析 JSON 对象
+	var resp = http.lastResponseObject();
+	if(type(resp) == "table" && resp[["msg"]]) return resp[["msg"]];
+
+	// 再尝试原始字符串 JSON
+	var raw = http.lastResponseString();
+	if(type(raw) == "string" && raw != "") {
+		import JSON;
+		var parsed = ..JSON.tryParse(raw);
+		if(type(parsed) == "table" && parsed[["msg"]]) return parsed[["msg"]];
+
+		// 服务端未捕获异常时可能返回 HTML；提取可读文本
+		var plain = ..string.replace(raw, "<[^>]+>", " ");
+		plain = ..string.replace(plain, "\s+", " ");
+		plain = ..string.trim(plain);
+		if(plain != "" && #plain < 300) return plain;
 	}
+
 	return defaultMsg;
 };
 
+// 上传硬件信息；serverUrl 形如 http://host:8080
 send = function(data, serverUrl){
-	var http = ..inet.http("hwinfo-client", false);
-	http.setTimeouts(10000, 10000, 10000);
-	
-	var jsonStr = ..JSON.stringify(data);
-	var headers = "Content-Type: application/json\r\n";
-	var result = http.post(serverUrl ++ "/api/upload", jsonStr, headers);
-	var statusCode = http.statusCode;
-	http.close();
-	
+	if(!serverUrl || serverUrl == "") {
+		return {code=-1; msg="未配置服务器地址"};
+	}
+
+	var http = createClient("hwinfo-client", 10000, 10000, 10000);
+	var resp, err;
+	try {
+		resp, err = http.post(serverUrl ++ "/api/upload", data);
+	} catch(ex) {
+		// jsonClient 在解析非 JSON 错误页时可能抛异常
+		var statusEx = http.lastStatusCode;
+		if(!statusEx) {
+			return {code=-1; msg="无法连接服务器，请检查网络"};
+		}
+		if(statusEx >= 500) {
+			return {code=-1; msg=extractErrMsg(http, "服务器存储失败")};
+		}
+		if(statusEx >= 400) {
+			return {code=-1; msg=extractErrMsg(http, "请求格式错误")};
+		}
+		return {code=-1; msg=tostring(ex) || "请求失败"};
+	}
+
+	var statusCode = http.lastStatusCode;
 	if(!statusCode) {
 		return {code=-1; msg="无法连接服务器，请检查网络"};
 	}
-	
-	if(statusCode >= 500) {
-		return {code=-1; msg=extractErrMsg(result, "服务器存储失败")};
+
+	if(!resp) {
+		if(statusCode >= 500) {
+			return {code=-1; msg=extractErrMsg(http, "服务器存储失败")};
+		}
+		if(statusCode >= 400) {
+			return {code=-1; msg=extractErrMsg(http, "请求格式错误")};
+		}
+		return {code=-1; msg=err || "请求失败"};
 	}
-	
-	if(statusCode >= 400) {
-		return {code=-1; msg=extractErrMsg(result, "请求格式错误")};
-	}
-	
-	if(type(result) != "string" || !result) {
+
+	if(type(resp) != "table") {
 		return {code=-1; msg="服务器响应格式错误"};
 	}
-	
-	var resp = ..JSON.tryParse(result);
-	if(!resp) return {code=-1; msg="服务器响应格式错误"};
-	
+
 	return resp;
 }
 
-ping = function(serverUrl){
-	var http = ..inet.http("hwinfo-ping", false);
-	http.setTimeouts(5000, 5000, 5000);
-	http.post(serverUrl ++ "/api/ping", "{}", "Content-Type: application/json\r\n");
-	var statusCode = http.statusCode;
-	http.close();
-	return statusCode && statusCode >= 200 && statusCode < 300;
+// 探测服务器是否可达
+ping = function(serverUrl, timeoutMs){
+	if(!serverUrl || serverUrl == "") return false;
+	if(!timeoutMs) timeoutMs = 3000;
+
+	var http = createClient("hwinfo-ping", timeoutMs, timeoutMs, timeoutMs);
+	try {
+		http.post(serverUrl ++ "/api/ping", {});
+	} catch(ex) {
+		// 状态码仍可能是 2xx；以 ok/status 为准
+	}
+	return http.ok() || (http.lastStatusCode >= 200 && http.lastStatusCode < 300);
 }

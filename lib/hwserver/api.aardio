@@ -5,100 +5,148 @@ import string;
 
 namespace hwserver.api;
 
+/*
+HTTP 路由与业务处理。
+
+重要：mainThread(app) 会把 app 跨线程序列化到工作线程。
+因此不能把命名空间里的 handlePing/handleUpload 作为“外层自由函数”
+再被 app 调用（跨线程后会失效，请求直接 500）。
+
+可行写法：
+1) 传给 mainThread 的必须是单个纯函数；
+2) 路由子函数写在该纯函数内部（每次请求在工作线程内创建）；
+3) 或业务全部内联在该纯函数中。
+
+启动方式仍为 mainThread + start(ip,port)，适合局域网 C/S。
+*/
+
+// 仅用于结构表达/单测说明；真正服务端请走 start()。
+// 注意：不要把这个 handle 直接交给 mainThread（同上面约束）。
+handle = function(response, request, session){
+	response.contentType = "application/json";
+	response.write({
+		code = -1;
+		msg = "请通过 hwserver.api.start() 启动服务；handle 不能直接跨线程绑定到 mainThread";
+	});
+}
+
+// 启动局域网 HTTP 服务（手动启停、固定端口）
 start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 	if(!ip) ip = "0.0.0.0";
 	if(!port) port = 8080;
 	if(!_dbPath) _dbPath = ..io.appData("hwinfo/hwinfo.db");
 	
-	var serverMain = ..wsock.tcp.simpleHttpServer.mainThread(
-		function(response, request, session){
-			response.contentType = "application/json";
-			
-			if(request.pathInfo == "/api/ping") {
-				response.write({code=0; msg="pong"});
+	// app 必须是“纯函数”：内部再定义路由子过程，避免跨线程自由变量失效
+	var app = function(response, request, session){
+		response.contentType = "application/json";
+		
+		var writeError = function(status, code, msg){
+			response.status = status;
+			response.write({
+				code = code;
+				msg = msg || "未知错误";
+			});
+		}
+		
+		var handlePing = function(){
+			response.write({code=0; msg="pong"});
+		}
+		
+		var handleUpload = function(){
+			var data = request.postJson();
+			if(!data) {
+				writeError("400 Bad Request", -1, "数据格式错误");
 				return;
 			}
 			
-			if(request.pathInfo == "/api/upload" && request.method == "POST") {
-				var data = request.postJson();
-				if(!data) {
+			import hwserver.db;
+			import hwserver.data;
+			import hwserver.log;
+			import string;
+			import thread.command;
+			
+			// dbPath / notifierHwnd 来自 serverMain.threadGlobal
+			// 用 db.init 确保表结构存在（避免仅打开空库导致 no such table）
+			var db = hwserver.db.init(dbPath);
+			if(!db) {
+				writeError("500 Internal Server Error", -1, "数据库打开失败");
+				hwserver.log.err("上传失败", "数据库打开失败");
+				return;
+			}
+			
+			var result = hwserver.data.insert(db, data);
+			db.close();
+			
+			if(result[["code"]] >= 0 && notifierHwnd) {
+				thread.command.post(notifierHwnd, "onUpload");
+			}
+			
+			if(result[["code"]] == 0) {
+				hwserver.log.info("上传成功", "使用人=" ++ (data[["used"]] || "") ++ " 单位=" ++ (data[["unit"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
+			}
+			elseif(result[["code"]] == 1) {
+				hwserver.log.info("记录已存在", "使用人=" ++ (data[["used"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
+			}
+			else {
+				if(..string.find(result[["msg"]], "校验失败")) {
 					response.status = "400 Bad Request";
-					response.write({code=-1; msg="数据格式错误"});
-					return;
-				}
-				
-				import sqlite;
-				import hwserver.data;
-				import hwserver.log;
-				import string;
-				import thread.command;
-				
-				var db = sqlite(dbPath);
-				if(!db) {
-					response.status = "500 Internal Server Error";
-					response.write({code=-1; msg="数据库打开失败"});
-					hwserver.log.err("上传失败", "数据库打开失败");
-					return;
-				}
-				
-				var result = hwserver.data.insert(db, data);
-				db.close();
-				
-				if(result[["code"]] >= 0 && notifierHwnd) {
-					thread.command.post(notifierHwnd, "onUpload");
-				}
-				
-				if(result[["code"]] == 0) {
-					hwserver.log.info("上传成功", "使用人=" ++ (data[["used"]] || "") ++ " 单位=" ++ (data[["unit"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
-				}
-				elseif(result[["code"]] == 1) {
-					hwserver.log.info("记录已存在", "使用人=" ++ (data[["used"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
 				}
 				else {
-					if(..string.find(result[["msg"]], "校验失败")) {
-						response.status = "400 Bad Request";
-					}
-					else {
-						response.status = "500 Internal Server Error";
-					}
-					hwserver.log.err("上传失败", result[["msg"]] || "未知错误");
-				}
-				response.write(result);
-				return;
-			}
-			
-			if(request.pathInfo == "/api/records" && request.method == "GET") {
-				import sqlite;
-				import hwserver.data;
-				import hwserver.log;
-				import string;
-				
-				var db = sqlite(dbPath);
-				if(!db) {
 					response.status = "500 Internal Server Error";
-					response.write({code=-1; msg="数据库连接失败"});
-					hwserver.log.err("查询失败", "数据库连接失败");
-					return;
 				}
-				
-				var unit;
-				var m = string.match(request.url, "unit=([^&]+)");
-				if(m) unit = ..inet.url.decode(m);
-				
-				var result = hwserver.data.queryAll(db, unit);
-				db.close();
-				hwserver.log.info("查询记录", "单位=" ++ (unit || "全部"));
-				response.write(result);
+				hwserver.log.err("上传失败", result[["msg"]] || "未知错误");
+			}
+			
+			response.write(result);
+		}
+		
+		var handleRecords = function(){
+			import hwserver.db;
+			import hwserver.data;
+			import hwserver.log;
+			
+			var db = hwserver.db.init(dbPath);
+			if(!db) {
+				writeError("500 Internal Server Error", -1, "数据库连接失败");
+				hwserver.log.err("查询失败", "数据库连接失败");
 				return;
 			}
 			
-			response.status = "404 Not Found";
-			response.write({code=-1; msg="Not Found"});
+			// 使用 request.query 封装，替代手搓 URL 正则
+			var unit = request.query("unit");
+			
+			var result = hwserver.data.queryAll(db, unit);
+			db.close();
+			hwserver.log.info("查询记录", "单位=" ++ (unit || "全部"));
+			response.write(result);
 		}
-	);
+		
+		var path = request.pathInfo;
+		var method = request.method;
+		
+		if(path == "/api/ping") {
+			return handlePing();
+		}
+		
+		if(path == "/api/upload" && method == "POST") {
+			return handleUpload();
+		}
+		
+		if(path == "/api/records" && method == "GET") {
+			return handleRecords();
+		}
+		
+		writeError("404 Not Found", -1, "Not Found");
+	}
 	
-	serverMain.threadGlobal = { dbPath = _dbPath; notifierHwnd = _notifierHwnd };
+	var serverMain = ..wsock.tcp.simpleHttpServer.mainThread(app);
+	
+	serverMain.threadGlobal = {
+		dbPath = _dbPath;
+		notifierHwnd = _notifierHwnd;
+	};
 	serverMain.threadNum = 4;
+	
 	var ok, errMsg = serverMain.start(ip, port);
 	
 	import hwserver.log;

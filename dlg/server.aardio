@@ -60,9 +60,9 @@ winform.vlist.onEditEnd = function(row,col,text,endType){
 	if(!dbCol or dbCol == "id") return false;
 	var db = sqlite(dbPath);
 	if(!db) return false;
-	db.exec("UPDATE hwinfo SET " ++ dbCol ++ "=" ++ sqlite.escape(text) ++ " WHERE id=" ++ idText);
+	var ret = hwserver.data.updateField(db, idText, dbCol, text);
 	db.close();
-	return true;
+	return ret && ret.code == 0;
 };
 winform.vlist.checkBox.show = true;
 winform.vlist.lineWidthV = 0;
@@ -137,25 +137,7 @@ var loadRecords = function(unit, keyword){
 	var db = sqlite(dbPath);
 	if(!db) return;
 	
-	var where = {};
-	if(unit && unit != "" && unit != "全部") {
-		..table.push(where, "unit=" ++ sqlite.escape(unit));
-	}
-	if(keyword && keyword != "") {
-		var kw = "%" ++ keyword ++ "%";
-		var searchCols = {"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"antivirus"};
-		var orParts = {};
-		for i = 1; #searchCols {
-			..table.push(orParts, searchCols[i] ++ " LIKE " ++ sqlite.escape(kw));
-		}
-		..table.push(where, "(" ++ ..string.join(orParts, " OR ") ++ ")");
-	}
-	
-	var sql = "SELECT * FROM hwinfo";
-	if(#where > 0) sql = sql ++ " WHERE " ++ ..string.join(where, " AND ");
-	sql = sql ++ " ORDER BY uploadTime DESC";
-	
-	var rows = db.getTable(sql);
+	var rows = hwserver.data.search(db, unit, keyword);
 	db.close();
 	if(!rows) return;
 	
@@ -265,7 +247,7 @@ var showEditDialog = function(row){
 	
 	var db = sqlite(dbPath);
 	if(!db) return;
-	var rec = db.stepQuery("SELECT * FROM hwinfo WHERE id=" ++ idText);
+	var rec = hwserver.data.getById(db, idText);
 	db.close();
 	if(!rec) return;
 	
@@ -356,15 +338,28 @@ var showEditDialog = function(row){
 			dlg.msgbox("数据库连接失败");
 			return;
 		}
-		var fields = {"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"officeDate";"antivirus";"avDate";"memories";"disks"};
-		var values = {dlg.editUsed.text; dlg.editUnit.text; dlg.editDept.text; dlg.editPcId.text; dlg.editHostname.text; dlg.editIps.text; dlg.editMacs.text; dlg.editOsver.text; dlg.editPcBrand.text; dlg.editOffice.text; dlg.editOfficeDate.text; dlg.editAntivirus.text; dlg.editAvDate.text; dlg.editMemories.text; dlg.editDisks.text};
-		var parts = {};
-		for i = 1; #fields {
-			..table.push(parts, fields[i] ++ "=" ++ sqlite.escape(values[i]));
-		}
-		var sql = "UPDATE hwinfo SET " ++ ..string.join(parts, ",") ++ " WHERE id=" ++ idText;
-		db2.exec(sql);
+		var ret = hwserver.data.update(db2, idText, {
+			used = dlg.editUsed.text;
+			unit = dlg.editUnit.text;
+			dept = dlg.editDept.text;
+			pcId = dlg.editPcId.text;
+			hostname = dlg.editHostname.text;
+			ips = dlg.editIps.text;
+			macs = dlg.editMacs.text;
+			osver = dlg.editOsver.text;
+			pcBrand = dlg.editPcBrand.text;
+			office = dlg.editOffice.text;
+			officeDate = dlg.editOfficeDate.text;
+			antivirus = dlg.editAntivirus.text;
+			avDate = dlg.editAvDate.text;
+			memories = dlg.editMemories.text;
+			disks = dlg.editDisks.text;
+		});
 		db2.close();
+		if(!ret || ret.code != 0) {
+			dlg.msgbox("保存失败：" ++ ((ret && ret.msg) || "未知错误"));
+			return;
+		}
 		dlg.close();
 		var idx = winform.cmbUnit.selIndex;
 		var unit = idx ? winform.cmbUnit.items[idx] : "全部";
@@ -405,16 +400,18 @@ winform.btnDelete.oncommand = function(id, event){
 		return;
 	}
 	
+	var ids = {};
+	for i = 1; #checked {
+		var idText = winform.vlist.getCellText(checked[i], 1);
+		if(idText) table.push(ids, idText);
+	}
+	
 	var db = sqlite(dbPath);
 	if(!db) {
 		winform.msgbox("数据库连接失败");
 		return;
 	}
-	
-	for i = 1; #checked {
-		var idText = winform.vlist.getCellText(checked[i], 1);
-		db.exec("DELETE FROM hwinfo WHERE id=" ++ idText);
-	}
+	hwserver.data.deleteByIds(db, ids);
 	db.close();
 	var idx = winform.cmbUnit.selIndex;
 	var unit = idx ? winform.cmbUnit.items[idx] : "全部";
@@ -461,8 +458,9 @@ winform.btnExport.oncommand = function(id, event){
 		winform.msgbox("数据库连接失败");
 		return;
 	}
-	var rows = db.getTable("SELECT * FROM hwinfo ORDER BY uploadTime DESC");
+	var result = hwserver.data.queryAll(db);
 	db.close();
+	var rows = result && result.data;
 	if(!rows or #rows == 0) {
 		winform.msgbox("没有数据可导出");
 		return;
@@ -518,7 +516,7 @@ winform.btnExport.oncommand = function(id, event){
 		var BOM = '\xEF\xBB\xBF';
 		string.save(path, BOM ++ content);
 		choiceDlg.close();
-		winform.msgbox("导出成功！\n" ++ path);
+		winform.msgbox('导出成功！\n' ++ path);
 	}
 	
 	var doExportExcel = function(){
@@ -558,7 +556,7 @@ winform.btnExport.oncommand = function(id, event){
 		excel.SaveAs(path, 51);
 		excel.Quit();
 		choiceDlg.close();
-		winform.msgbox("导出成功！\n" ++ path);
+		winform.msgbox('导出成功！\n' ++ path);
 	}
 	
 	choiceDlg.btnCsv.oncommand = function(id, event){

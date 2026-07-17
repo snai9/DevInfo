@@ -144,3 +144,107 @@ getUnits = function(db){
 	}
 	return units;
 }
+
+// 允许编辑的字段白名单（防止把自由文本拼成列名）
+_editableFields = {
+	used = true;
+	unit = true;
+	dept = true;
+	pcId = true;
+	hostname = true;
+	ips = true;
+	macs = true;
+	osver = true;
+	pcBrand = true;
+	office = true;
+	officeDate = true;
+	antivirus = true;
+	avDate = true;
+	memories = true;
+	disks = true;
+}
+
+// 关键词搜索列
+_searchFields = {
+	"used";"unit";"dept";"pcId";"hostname";"ips";"macs";"osver";"pcBrand";"office";"antivirus"
+}
+
+// 按 ID 取单条记录
+getById = function(db, id){
+	id = ..tonumber(id);
+	if(!db || !id) return null;
+	return db.stepQuery("SELECT * FROM hwinfo WHERE id=?", {id});
+}
+
+// 单位 + 关键词筛选，返回行数组（失败返回空数组）
+search = function(db, unit, keyword){
+	if(!db) return {};
+	
+	var where = {};
+	if(unit && unit != "" && unit != "全部") {
+		..table.push(where, "unit=" ++ ..sqlite.escape(unit));
+	}
+	
+	if(keyword && ..string.trim(keyword) != "") {
+		var kw = "%" ++ ..string.trim(keyword) ++ "%";
+		var orParts = {};
+		for i = 1; #_searchFields {
+			..table.push(orParts, _searchFields[i] ++ " LIKE " ++ ..sqlite.escape(kw));
+		}
+		..table.push(where, "(" ++ ..string.join(orParts, " OR ") ++ ")");
+	}
+	
+	var sql = "SELECT * FROM hwinfo";
+	if(#where > 0) sql = sql ++ " WHERE " ++ ..string.join(where, " AND ");
+	sql = sql ++ " ORDER BY uploadTime DESC";
+	
+	var rows = db.getTable(sql);
+	return rows || {};
+}
+
+// 批量/多字段更新，fields 为 {fieldName=value, ...}
+update = function(db, id, fields){
+	id = ..tonumber(id);
+	if(!db || !id || !fields) {
+		return {code=-1; msg="参数错误"};
+	}
+	
+	var parts = {};
+	for k, v in fields {
+		if(_editableFields[k]) {
+			..table.push(parts, k ++ "=" ++ ..sqlite.escape(v));
+		}
+	}
+	if(#parts == 0) {
+		return {code=-1; msg="没有可更新字段"};
+	}
+	
+	var sql = "UPDATE hwinfo SET " ++ ..string.join(parts, ",") ++ " WHERE id=" ++ id;
+	db.exec(sql);
+	return {code=0; msg="更新成功"};
+}
+
+// 单字段更新（列表内联编辑）
+updateField = function(db, id, field, value){
+	if(!_editableFields[field]) {
+		return {code=-1; msg="字段不可编辑"};
+	}
+	var t = {};
+	t[field] = value;
+	return update(db, id, t);
+}
+
+// 按 ID 数组删除，返回成功删除的目标数
+deleteByIds = function(db, ids){
+	if(!db || !ids || #ids == 0) return 0;
+	
+	var count = 0;
+	for i = 1; #ids {
+		var id = ..tonumber(ids[i]);
+		if(id) {
+			db.exec("DELETE FROM hwinfo WHERE id=" ++ id);
+			count++;
+		}
+	}
+	return count;
+}
