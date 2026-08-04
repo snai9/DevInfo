@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=资产信息采集系统
+Comment=XX单位资产信息采集客户端
+Exec=bash -c 'cd "$(dirname "$(readlink -f "%k")")" && chmod +x "资产信息采集系统" 2>/dev/null && "./资产信息采集系统"'
+Icon=computer
+Terminal=true
+Type=Application
+Categories=Utility;
