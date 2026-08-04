@@ -3,34 +3,89 @@
 //============================================================
 //  本模块负责与硬件信息服务端通信：
 //      - send(data, serverUrl) 上传硬件数据
-//      - ping(serverUrl) 探测服务端是否在线
+//      - ping(serverUrl, timeoutMs) 探测服务端是否在线
 //
 //  命名空间：hwinfo.upload
+//
+//  关键变更（vs 旧版）：
+//      1. 改用 web.rest.jsonClient 替代 inet.http 手动拼 JSON
+//         - jsonClient 自动序列化/反序列化，无需手动 JSON.stringify + Content-Type
+//         - http.post(url, table) 直接传表，返回值自动解析为表
+//         - 异常时需用 lastResponseObject() / lastResponseString() 获取原始响应
+//      2. 新增 extractErrMsg 统一提取错误信息
+//         - 优先从已解析的 JSON 对象取 msg
+//         - 回退到原始字符串解析
+//         - 最后尝试从 HTML 错误页提取可读文本
 //============================================================
-import inet.http;
-import JSON;
+import web.rest.jsonClient;
 
 namespace hwinfo.upload;
 
 
 //============================================================
-//  extractErrMsg：从响应中提取错误信息
+//  createClient：创建并配置 REST JSON 客户端
 //============================================================
 //  参数：
-//      result      HTTP 响应内容（字符串或其他类型）
+//      userAgent    HTTP User-Agent 字符串，默认 "hwinfo-client"
+//      connectMs    连接超时（毫秒），默认 10000
+//      sendMs       发送超时（毫秒），默认 10000
+//      receiveMs    接收超时（毫秒），默认 10000
+//
+//  返回：配置好的 web.rest.jsonClient 实例
+//
+//  【注意】web.rest.jsonClient 与 inet.http 的区别：
+//      - inet.http.post() 需要手动传 JSON 字符串和 Content-Type 头
+//      - jsonClient.post() 直接传 table，自动序列化，返回值自动反序列化为 table
+//      - jsonClient 解析非 JSON 响应时可能抛异常，需要 try/catch 包裹
+//============================================================
+var createClient = function(userAgent, connectMs, sendMs, receiveMs){
+	var http = ..web.rest.jsonClient(userAgent || "hwinfo-client");
+	http.setTimeouts(
+		connectMs || 10000,
+		sendMs || 10000,
+		receiveMs || 10000
+	);
+	return http;
+};
+
+
+//============================================================
+//  extractErrMsg：从 HTTP 响应中提取错误信息
+//============================================================
+//  参数：
+//      http        web.rest.jsonClient 实例（用于读取响应）
 //      defaultMsg  默认错误信息
 //
 //  返回：错误信息字符串
 //
-//  用途：统一处理 5xx 和 4xx 错误的错误信息提取，避免重复代码。
-//        服务端返回的 JSON 中通常包含 msg 字段，解析失败时使用默认值。
+//  提取优先级：
+//      1. lastResponseObject() 已解析的 JSON 对象中的 msg 字段
+//      2. lastResponseString() 原始字符串 → JSON.tryParse → msg 字段
+//      3. 原始字符串去 HTML 标签后的纯文本（服务端未捕获异常时可能返回 HTML）
+//      4. 兜底返回 defaultMsg
+//
+//  【注意】jsonClient 的 lastResponseObject() 在响应不是合法 JSON 时返回 null
 //============================================================
-var extractErrMsg = function(result, defaultMsg){
-    if(type(result) == "string") {
-        var resp = ..JSON.tryParse(result);
-        if(resp && resp[["msg"]]) return resp[["msg"]];
-    }
-    return defaultMsg;
+var extractErrMsg = function(http, defaultMsg){
+	// 优先拿已解析 JSON 对象
+	var resp = http.lastResponseObject();
+	if(type(resp) == "table" && resp[["msg"]]) return resp[["msg"]];
+
+	// 再尝试原始字符串 JSON
+	var raw = http.lastResponseString();
+	if(type(raw) == "string" && raw != "") {
+		import JSON;
+		var parsed = ..JSON.tryParse(raw);
+		if(type(parsed) == "table" && parsed[["msg"]]) return parsed[["msg"]];
+
+		// 服务端未捕获异常时可能返回 HTML；提取可读文本
+		var plain = ..string.replace(raw, "<[^>]+>", " ");
+		plain = ..string.replace(plain, "\s+", " ");
+		plain = ..string.trim(plain);
+		if(plain != "" && #plain < 300) return plain;
+	}
+
+	return defaultMsg;
 };
 
 
@@ -46,55 +101,62 @@ var extractErrMsg = function(result, defaultMsg){
 //      code = 1   记录已存在
 //      code = -1  上传失败（msg 含具体原因）
 //
-//  防御性编程：
-//      - 不使用 try/catch
-//      - 通过 http.statusCode 判断结果
+//  异常处理策略：
+//      - jsonClient 在解析非 JSON 错误页时可能抛异常，需要 try/catch
+//      - catch 中通过 lastStatusCode 判断网络层是否连通
 //      - statusCode 为 null/0 时表示无法连接
 //      - statusCode >= 500 时表示服务器错误
 //      - statusCode >= 400 时表示请求错误
-//      - 否则从响应 JSON 中解析 code/msg
+//      - 正常返回时 resp 已是 table（jsonClient 自动反序列化）
 //============================================================
 send = function(data, serverUrl){
-    // 第二个参数 false 表示不使用 SSL（HTTP 而非 HTTPS）
-    var http = ..inet.http("hwinfo-client", false);
-    // 设置超时（毫秒）：连接、发送、接收各 10 秒
-    http.setTimeouts(10000, 10000, 10000);
+	if(!serverUrl || serverUrl == "") {
+		return {code=-1; msg="未配置服务器地址"};
+	}
 
-    // 把 data 表序列化为 JSON 字符串
-    var jsonStr = ..JSON.stringify(data);
-    // HTTP 请求头，Content-Type 必须正确
-    var headers = "Content-Type: application/json\r\n";
+	var http = createClient("hwinfo-client", 10000, 10000, 10000);
+	var resp, err;
+	try {
+		// jsonClient.post 自动将 data 序列化为 JSON，Content-Type 自动设为 application/json
+		// 返回值 resp 是自动反序列化的 table（如果响应是合法 JSON）
+		resp, err = http.post(serverUrl ++ "/api/upload", data);
+	} catch(ex) {
+		// jsonClient 在解析非 JSON 错误页时可能抛异常
+		var statusEx = http.lastStatusCode;
+		if(!statusEx) {
+			return {code=-1; msg="无法连接服务器，请检查网络"};
+		}
+		if(statusEx >= 500) {
+			return {code=-1; msg=extractErrMsg(http, "服务器存储失败")};
+		}
+		if(statusEx >= 400) {
+			return {code=-1; msg=extractErrMsg(http, "请求格式错误")};
+		}
+		return {code=-1; msg=tostring(ex) || "请求失败"};
+	}
 
-    // POST 请求
-    var result = http.post(serverUrl ++ "/api/upload", jsonStr, headers);
-    var statusCode = http.statusCode;
-    http.close();
+	var statusCode = http.lastStatusCode;
+	if(!statusCode) {
+		return {code=-1; msg="无法连接服务器，请检查网络"};
+	}
 
-    // 无法连接到服务器
-    if(!statusCode) {
-        return {code=-1; msg="无法连接服务器，请检查网络"};
-    }
+	if(!resp) {
+		if(statusCode >= 500) {
+			return {code=-1; msg=extractErrMsg(http, "服务器存储失败")};
+		}
+		if(statusCode >= 400) {
+			return {code=-1; msg=extractErrMsg(http, "请求格式错误")};
+		}
+		return {code=-1; msg=err || "请求失败"};
+	}
 
-    // 5xx 服务器错误
-    if(statusCode >= 500) {
-        return {code=-1; msg=extractErrMsg(result, "服务器存储失败")};
-    }
+	// resp 应该是 table（jsonClient 自动反序列化）
+	if(type(resp) != "table") {
+		return {code=-1; msg="服务器响应格式错误"};
+	}
 
-    // 4xx 客户端错误
-    if(statusCode >= 400) {
-        return {code=-1; msg=extractErrMsg(result, "请求格式错误")};
-    }
-
-    // 2xx 成功：解析响应 JSON
-    if(type(result) != "string" || !result) {
-        return {code=-1; msg="服务器响应格式错误"};
-    }
-
-    var resp = ..JSON.tryParse(result);
-    if(!resp) return {code=-1; msg="服务器响应格式错误"};
-
-    // 把服务端的 code/msg 透传给调用方
-    return resp;
+	// 把服务端的 code/msg 透传给调用方
+	return resp;
 }
 
 
@@ -102,18 +164,25 @@ send = function(data, serverUrl){
 //============================================================
 //  ping：探测服务端是否在线
 //============================================================
-//  参数：serverUrl  服务端基地址
+//  参数：
+//      serverUrl  服务端基地址
+//      timeoutMs  超时毫秒数，默认 3000
 //  返回：true 在线，false 离线
 //
 //  用途：客户端启动时并发 ping 多个地址，快速找到可用的服务端。
+//
+//  【注意】即使 jsonClient.post 抛异常（如响应非 JSON），
+//  只要 HTTP 状态码是 2xx 就认为服务端在线。
 //============================================================
-ping = function(serverUrl){
-    var http = ..inet.http("hwinfo-ping", false);
-    // ping 用较短的超时（5 秒），避免长时间等待
-    http.setTimeouts(5000, 5000, 5000);
-    http.post(serverUrl ++ "/api/ping", "{}", "Content-Type: application/json\r\n");
-    var statusCode = http.statusCode;
-    http.close();
-    // 2xx 表示成功
-    return statusCode && statusCode >= 200 && statusCode < 300;
+ping = function(serverUrl, timeoutMs){
+	if(!serverUrl || serverUrl == "") return false;
+	if(!timeoutMs) timeoutMs = 3000;
+
+	var http = createClient("hwinfo-ping", timeoutMs, timeoutMs, timeoutMs);
+	try {
+		http.post(serverUrl ++ "/api/ping", {});
+	} catch(ex) {
+		// 状态码仍可能是 2xx；以 ok/status 为准
+	}
+	return http.ok() || (http.lastStatusCode >= 200 && http.lastStatusCode < 300);
 }

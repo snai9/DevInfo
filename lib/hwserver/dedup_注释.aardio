@@ -1,0 +1,21 @@
+// dedup_注释.aardio —— hwserver.dedup 去重逻辑模块（带详细注释版）
+// 功能：检查硬件信息记录是否已存在（用于去重判断）
+// 注意：当前实际去重逻辑已内联到 hwserver.data.insert 中（全字段去重），
+//       此模块保留作为简化版去重接口（仅比较部分核心字段）
+
+import sqlite;  // SQLite 数据库操作
+
+namespace hwserver.dedup;
+
+// 检查记录是否已存在
+// 参数：db - 数据库连接，record - 记录表（含 used/hostname/ips 等字段）
+// 返回：true=已存在，false=不存在
+// 注意：此函数仅比较9个核心字段，而 data.insert 中的去重比较15个字段
+exists = function(db, record){
+	var row = db.stepQuery(
+		"SELECT COUNT(*) as cnt FROM hwinfo WHERE used=? AND hostname=? AND ips=? AND macs=? AND osver=? AND office=? AND antivirus=? AND memories=? AND disks=?",
+		{record.used; record.hostname; record.ips; record.macs; record.osver; record.office; record.antivirus; record.memories; record.disks}
+	);
+	if(!row) return false;
+	return tonumber(row[["cnt"]]) > 0;
+}

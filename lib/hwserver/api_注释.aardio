@@ -1,0 +1,195 @@
+// api_注释.aardio —— hwserver.api HTTP API服务层（带详细注释版）
+// 功能：启动局域网 HTTP 服务，提供 /api/ping、/api/upload、/api/records 三个接口
+// 核心约束：mainThread(app) 会把 app 跨线程序列化到工作线程，
+//           因此路由子函数必须定义在 app 纯函数内部，不能用命名空间外层函数
+
+import wsock.tcp.simpleHttpServer;  // HTTP 服务器
+import thread.command;               // 跨线程通知
+import io;                           // 文件/路径操作
+import string;                       // 字符串处理
+
+namespace hwserver.api;
+
+/*
+HTTP 路由与业务处理。
+
+重要：mainThread(app) 会把 app 跨线程序列化到工作线程。
+因此不能把命名空间里的 handlePing/handleUpload 作为"外层自由函数"
+再被 app 调用（跨线程后会失效，请求直接 500）。
+
+可行写法：
+1) 传给 mainThread 的必须是单个纯函数；
+2) 路由子函数写在该纯函数内部（每次请求在工作线程内创建）；
+3) 或业务全部内联在该纯函数中。
+
+启动方式仍为 mainThread + start(ip,port)，适合局域网 C/S。
+*/
+
+// 仅用于结构表达/单测说明；真正服务端请走 start()。
+// 注意：不要把这个 handle 直接交给 mainThread（同上面约束）。
+handle = function(response, request, session){
+	response.contentType = "application/json";
+	response.write({
+		code = -1;
+		msg = "请通过 hwserver.api.start() 启动服务；handle 不能直接跨线程绑定到 mainThread";
+	});
+}
+
+// 启动局域网 HTTP 服务（手动启停、固定端口）
+// 参数：ip - 监听地址（默认0.0.0.0），port - 端口（默认8080）
+//       _dbPath - 数据库路径，_notifierHwnd - 通知窗口句柄，onStatus - 启动状态回调
+// 返回：serverMain对象, 是否成功, 错误信息
+start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
+	if(!ip) ip = "0.0.0.0";
+	if(!port) port = 8080;
+	if(!_dbPath) _dbPath = ..io.appData("hwinfo/hwinfo.db");
+	
+	// app 必须是"纯函数"：内部再定义路由子过程，避免跨线程自由变量失效
+	// 这是陷阱58/64的核心：mainThread 会把 app 序列化到工作线程，
+	// 外层命名空间函数引用会失效，所以子函数必须定义在 app 内部
+	var app = function(response, request, session){
+		response.contentType = "application/json";
+		
+		// 统一错误响应辅助函数
+		var writeError = function(status, code, msg){
+			response.status = status;
+			response.write({
+				code = code;
+				msg = msg || "未知错误";
+			});
+		}
+		
+		// GET /api/ping —— 心跳检测
+		var handlePing = function(){
+			response.write({code=0; msg="pong"});
+		}
+		
+		// POST /api/upload —— 接收客户端上传的硬件信息
+		var handleUpload = function(){
+			var data = request.postJson();  // 自动解析 JSON 请求体
+			if(!data) {
+				writeError("400 Bad Request", -1, "数据格式错误");
+				return;
+			}
+			
+			// 工作线程内必须重新 import 所有需要的库
+			import hwserver.db;
+			import hwserver.data;
+			import hwserver.log;
+			import string;
+			import thread.command;
+			
+			// dbPath / notifierHwnd 来自 serverMain.threadGlobal
+			// 在工作线程中通过全局表访问（..dbPath, ..notifierHwnd）
+			// 用 db.init 确保表结构存在（避免仅打开空库导致 no such table）
+			var db = hwserver.db.init(dbPath);
+			if(!db) {
+				writeError("500 Internal Server Error", -1, "数据库打开失败");
+				hwserver.log.err("上传失败", "数据库打开失败");
+				return;
+			}
+			
+			// 调用数据层插入（含校验+去重）
+			var result = hwserver.data.insert(db, data);
+			db.close();
+			
+			// 上传成功后通知 UI 线程刷新列表（异步 post，不阻塞工作线程）
+			if(result[["code"]] >= 0 && notifierHwnd) {
+				thread.command.post(notifierHwnd, "onUpload");
+			}
+			
+			// 记录操作日志
+			if(result[["code"]] == 0) {
+				hwserver.log.info("上传成功", "使用人=" ++ (data[["used"]] || "") ++ " 单位=" ++ (data[["unit"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
+			}
+			elseif(result[["code"]] == 1) {
+				hwserver.log.info("记录已存在", "使用人=" ++ (data[["used"]] || "") ++ " 计算机名=" ++ (data[["hostname"]] || ""));
+			}
+			else {
+				// 校验失败返回400，其他失败返回500
+				if(..string.find(result[["msg"]], "校验失败")) {
+					response.status = "400 Bad Request";
+				}
+				else {
+					response.status = "500 Internal Server Error";
+				}
+				hwserver.log.err("上传失败", result[["msg"]] || "未知错误");
+			}
+			
+			response.write(result);
+		}
+		
+		// GET /api/records —— 查询记录（支持 unit 参数筛选）
+		var handleRecords = function(){
+			import hwserver.db;
+			import hwserver.data;
+			import hwserver.log;
+			
+			var db = hwserver.db.init(dbPath);
+			if(!db) {
+				writeError("500 Internal Server Error", -1, "数据库连接失败");
+				hwserver.log.err("查询失败", "数据库连接失败");
+				return;
+			}
+			
+			// 使用 request.query 封装，替代手搓 URL 正则
+			// 如 /api/records?unit=局机关 → request.query("unit") 返回 "局机关"
+			var unit = request.query("unit");
+			
+			var result = hwserver.data.queryAll(db, unit);
+			db.close();
+			hwserver.log.info("查询记录", "单位=" ++ (unit || "全部"));
+			response.write(result);
+		}
+		
+		// 路由分发
+		var path = request.pathInfo;   // 请求路径（不含查询参数）
+		var method = request.method;   // HTTP 方法
+		
+		if(path == "/api/ping") {
+			return handlePing();
+		}
+		
+		if(path == "/api/upload" && method == "POST") {
+			return handleUpload();
+		}
+		
+		if(path == "/api/records" && method == "GET") {
+			return handleRecords();
+		}
+		
+		// 未匹配的路由返回 404
+		writeError("404 Not Found", -1, "Not Found");
+	}
+	
+	// 创建 HTTP 服务器主线程对象
+	var serverMain = ..wsock.tcp.simpleHttpServer.mainThread(app);
+	
+	// 通过 threadGlobal 传递变量到工作线程全局表
+	// 工作线程中通过 ..dbPath / ..notifierHwnd 访问
+	serverMain.threadGlobal = {
+		dbPath = _dbPath;           // 数据库路径
+		notifierHwnd = _notifierHwnd; // 通知窗口句柄（用于 thread.command.post）
+	};
+	serverMain.threadNum = 4;  // 工作线程数
+	
+	// 启动服务
+	var ok, errMsg = serverMain.start(ip, port);
+	
+	// 记录启动日志
+	import hwserver.log;
+	if(ok) {
+		hwserver.log.info("服务启动", "端口=" .. tostring(port));
+	}
+	else {
+		hwserver.log.err("服务启动失败", errMsg || "未知错误");
+	}
+	
+	// 调用状态回调（通知 UI 层）
+	if(onStatus) {
+		if(ok) onStatus(true, "服务已启动：" ++ serverMain.getUrl());
+		else onStatus(false, "启动失败：" ++ (errMsg || "未知错误"));
+	}
+	
+	return serverMain, ok, errMsg;
+}

@@ -21,6 +21,7 @@ namespace hwinfo.config;
 //------------------------------------------------------------
 //  这些是内置的备用地址，会在配置文件中没有自定义地址时使用。
 //  客户端会依次 ping 这些地址，第一个 200 的就是活动服务器。
+//  新增了 127.0.0.1:8080 用于本地开发/测试。
 //------------------------------------------------------------
 defaultUrls = {"http://10.44.179.88:8080";"http://10.130.175.88:8080";"http://127.0.0.1:8080"};
 
@@ -39,33 +40,34 @@ defaultUrls = {"http://10.44.179.88:8080";"http://10.130.175.88:8080";"http://12
 //  向后兼容：如果旧配置只有 serverUrl（单数），自动转为 serverUrls（数组）
 //============================================================
 load = function(){
-    // io.appData(path) 返回 %APPDATA%\<path> 的完整路径
-    // 例如 C:\Users\xxx\AppData\Roaming\hwinfo\config.json
-    var path = ..io.appData("hwinfo/config.json");
-    var cfg = ..io.exist(path) && ..JSON.load(path);
+	// io.appData(path) 返回 %APPDATA%\<path> 的完整路径
+	// 例如 C:\Users\xxx\AppData\Roaming\hwinfo\config.json
+	var path = ..io.appData("hwinfo/config.json");
+	var cfg = ..io.exist(path) && ..JSON.load(path);
 
-    // 配置文件不存在或解析失败时使用默认值
-    if(!cfg) return {used=""; unit=""; dept=""; serverUrls=defaultUrls; activeUrl=""};
+	// 配置文件不存在或解析失败时使用默认值
+	if(!cfg) return {used=""; unit=""; dept=""; serverUrls=defaultUrls; activeUrl=""};
 
-    // 字段兜底：确保所有必要字段都存在
-    if(!cfg.used) cfg.used = "";
-    if(!cfg.unit) cfg.unit = "";
-    if(!cfg.dept) cfg.dept = "";
+	// 字段兜底：确保所有必要字段都存在
+	if(!cfg.used) cfg.used = "";
+	if(!cfg.unit) cfg.unit = "";
+	if(!cfg.dept) cfg.dept = "";
 
-    // 向后兼容：旧版配置可能用 serverUrl（单数字符串）
-    if(!cfg.serverUrls || #cfg.serverUrls == 0) {
-        if(cfg[["serverUrl"]] && cfg[["serverUrl"]] != "") {
-            cfg.serverUrls = {cfg[["serverUrl"]]};
-        }
-        else {
-            cfg.serverUrls = defaultUrls;
-        }
-    }
+	// 向后兼容：旧版配置可能用 serverUrl（单数字符串）
+	// cfg[["serverUrl"]] 用双方括号访问，避免与命名空间成员冲突
+	if(!cfg.serverUrls || #cfg.serverUrls == 0) {
+		if(cfg[["serverUrl"]] && cfg[["serverUrl"]] != "") {
+			cfg.serverUrls = {cfg[["serverUrl"]]};
+		}
+		else {
+			cfg.serverUrls = defaultUrls;
+		}
+	}
 
-    // 设置当前活动服务器为列表中的第一个
-    if(!cfg.activeUrl) cfg.activeUrl = cfg.serverUrls[1] || "";
+	// 设置当前活动服务器为列表中的第一个
+	if(!cfg.activeUrl) cfg.activeUrl = cfg.serverUrls[1] || "";
 
-    return cfg;
+	return cfg;
 }
 
 
@@ -77,8 +79,8 @@ load = function(){
 //  JSON.save 内部会调用 string.save 写入文件。
 //============================================================
 save = function(cfg){
-    var dir = ..io.appData("hwinfo/");
-    ..io.createDir(dir);  // 目录不存在则创建
-    var path = ..io.appData("hwinfo/config.json");
-    ..JSON.save(path, cfg);
+	var dir = ..io.appData("hwinfo/");
+	..io.createDir(dir);  // 目录不存在则创建
+	var path = ..io.appData("hwinfo/config.json");
+	..JSON.save(path, cfg);
 }

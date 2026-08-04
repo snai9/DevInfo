@@ -1,0 +1,774 @@
+//============================================================
+//  单位资产信息采集系统 —— 客户端主程序
+//============================================================
+//  本文件是 C/S 架构中客户端的完整实现，由 main.aardio 通过
+//  loadcodex("/dlg/client.aardio") 加载执行。
+//
+//  功能概览：
+//      1. 采集本机硬件信息（计算机名、操作系统、IP/MAC、品牌编号、
+//         办公软件、杀毒软件、内存、硬盘）
+//      2. 显示采集结果到主窗体
+//      3. 自动探测可用服务器并上传数据
+//      4. 提供修改使用人、服务器设置等交互功能
+//
+//  整体流程：
+//      doCollect() → mainForm.show() → checkServer() → win.loopMessage()
+//      启动时先采集 → 显示窗体 → 并行探测服务器 → 进入消息循环
+//
+//  aardio 规范提醒：
+//      1. 所有 import 语句必须放在文件顶部
+//      2. DSG 窗体定义块必须放在顶层
+//      3. GUI 程序禁止 import console
+//      4. 客户端主窗体使用 mainForm（正规 aardio 命名规范）
+//============================================================
+
+
+//============================================================
+//  一、import 语句
+//============================================================
+//  win.ui           窗体基础库，提供 win.form、控件创建等
+//  fonts.fontAwesome FontAwesome 图标字体，用于状态栏图标
+//  thread.command   线程间消息传递，用于后台线程回调 UI
+//  hwinfo.config    配置管理（加载/保存用户信息、服务器地址）
+//  hwinfo.collect   硬件信息采集（CPU、内存、硬盘、网络等）
+//  hwinfo.upload    数据上传（HTTP POST 到服务端）
+//  hwinfo.namedlg   用户信息录入弹窗（使用人、单位、部门）
+//============================================================
+import win.ui;
+import fonts.fontAwesome;
+import thread.command;
+
+import hwinfo.config;
+import hwinfo.collect;
+import hwinfo.upload;
+import hwinfo.namedlg;
+
+//============================================================
+//  二、DSG 窗体定义
+//============================================================
+//  aardio 设计器只识别第一个 DSG 块，不可拆分或嵌套。
+//
+//  颜色规则（重要）：
+//      - DSG 中 bgcolor / color 使用 BGR 格式（蓝绿红字节序）
+//        例：0xE0F0F8 → B=0xE0, G=0xF0, R=0xF8 → RGB(248,240,224)
+//      - plus.skin() 的颜色使用 ARGB 格式，必须带 0xFF alpha 前缀
+//        例：0xFFD4A846 → A=0xFF, R=0xD4, G=0xA8, B=0x46
+//      - 两者格式不同，切勿混用！
+//
+//  控件类型说明：
+//      plus    增强按钮，支持 skin() 自定义外观（渐变、悬停等）
+//      bkplus  背景增强控件，用于状态栏图标/文字（不接收焦点）
+//      static  静态文本标签，只显示不可编辑
+//      edit    可编辑文本框，multiline=1 时为多行
+//      groupbox 分组框，视觉上归类控件
+//
+//  状态栏控件（底部区域）：
+//      statusLine       金色分隔线（0xD4A846 BGR 金色）
+//      statusIcon       状态图标（FontAwesome 字体）
+//      statusText       状态文字
+//      statusServerIcon 服务器图标
+//      statusServerText 服务器连接状态文字
+//      statusTime       右侧时钟
+//      db/dl/dr=1       锚定底边/左边/右边（窗口缩放时跟随）
+//
+//  字体规则：
+//      FontAwesome 图标和中文文字不能混用同一 plus 控件（字体不包含中文字形）
+//============================================================
+/*DSG{{*/
+var mainForm = win.form(text="XX单位资产信息采集系统";right=599;bottom=689;bgcolor=0xE0F0F8;border="dialog frame";center=1)
+mainForm.add(
+btnEditInfo={cls="plus";text="修改信息";left=398;top=8;right=490;bottom=34;z=22};
+btnExit={cls="plus";text="退出";left=512;top=623;right=590;bottom=655;z=26};
+btnRefresh={cls="plus";text="刷新信息";left=240;top=623;right=360;bottom=655;z=24};
+btnServerCfg={cls="plus";text="服务器设置";left=498;top=8;right=590;bottom=34;z=23};
+btnUpload={cls="plus";text="上传信息";left=376;top=623;right=496;bottom=655;notify=1;z=25};
+grpBasic={cls="groupbox";text="基本信息";left=12;top=44;right=588;bottom=183;bgcolor=0xE0F0F8;color=0x0B86B8;font=LOGFONT(h=-13);z=17};
+grpDisk={cls="groupbox";text="硬盘信息";left=12;top=530;right=588;bottom=610;bgcolor=0xE0F0F8;color=0x0B86B8;font=LOGFONT(h=-13);z=1};
+grpMemory={cls="groupbox";text="内存信息";left=12;top=426;right=588;bottom=516;bgcolor=0xE0F0F8;color=0x0B86B8;font=LOGFONT(h=-13);z=16};
+grpNetwork={cls="groupbox";text="网络信息";left=12;top=189;right=588;bottom=269;bgcolor=0xE0F0F8;color=0x0B86B8;font=LOGFONT(h=-13);z=3};
+grpSoftware={cls="groupbox";text="软件信息";left=12;top=275;right=588;bottom=414;bgcolor=0xE0F0F8;color=0x0B86B8;font=LOGFONT(h=-13);z=13};
+lblAntivirus={cls="static";text="杀毒软件：";left=24;top=346;right=110;bottom=364;bgcolor=0xE0F0F8;color=0x666666;z=4};
+lblAvDate={cls="static";text="安装日期：";left=24;top=372;right=110;bottom=390;bgcolor=0xE0F0F8;color=0x666666;z=29};
+lblHostname={cls="static";text="计算机名：";left=24;top=66;right=110;bottom=84;bgcolor=0xE0F0F8;color=0x666666;z=12};
+lblIp={cls="static";text="IP地址：";left=24;top=216;right=110;bottom=234;bgcolor=0xE0F0F8;color=0x666666;z=15};
+lblMac={cls="static";text="MAC地址：";left=24;top=243;right=110;bottom=261;bgcolor=0xE0F0F8;color=0x666666;z=5};
+lblOffice={cls="static";text="办公软件：";left=24;top=294;right=110;bottom=312;bgcolor=0xE0F0F8;color=0x666666;z=6};
+lblOfficeDate={cls="static";text="安装日期：";left=24;top=320;right=110;bottom=338;bgcolor=0xE0F0F8;color=0x666666;z=27};
+lblOsver={cls="static";text="操作系统：";left=24;top=96;right=110;bottom=114;bgcolor=0xE0F0F8;color=0x666666;z=11};
+lblPcBrand={cls="static";text="计算机品牌：";left=24;top=126;right=110;bottom=144;bgcolor=0xE0F0F8;color=0x666666;z=30};
+lblPcId={cls="static";text="计算机编号：";left=24;top=156;right=110;bottom=174;bgcolor=0xE0F0F8;color=0x666666;z=31};
+lblUsed={cls="static";text="使用人：";left=16;top=12;right=80;bottom=32;bgcolor=0xE0F0F8;color=0x666666;font=LOGFONT(h=-14);z=2};
+statusIcon={cls="bkplus";text='\uF058';left=10;top=668;right=30;bottom=688;color=0x0B86B8;db=1;dl=1;font=LOGFONT(h=-14;name='FontAwesome');z=35};
+statusLine={cls="bkplus";left=0;top=660;right=600;bottom=662;bgcolor=0xD4A846;db=1;dl=1;dr=1;z=39};
+statusServerIcon={cls="bkplus";text='\uF233';left=340;top=668;right=360;bottom=688;color=0x999999;db=1;font=LOGFONT(name='FontAwesome');z=37};
+statusServerText={cls="bkplus";text="未连接";left=362;top=668;right=470;bottom=688;align="left";color=0x999999;db=1;z=40};
+statusText={cls="bkplus";text="就绪";left=34;top=668;right=340;bottom=688;align="left";color=0x666666;db=1;dl=1;z=36};
+statusTime={cls="bkplus";text="--:--:--";left=472;top=668;right=590;bottom=688;align="right";color=0x999999;db=1;dr=1;z=38};
+txtAntivirus={cls="static";left=116;top=346;right=580;bottom=364;bgcolor=0xE0F0F8;color=0x666666;z=14};
+txtAvDate={cls="static";left=116;top=372;right=580;bottom=390;bgcolor=0xE0F0F8;color=0x666666;z=32};
+txtDisk={cls="edit";left=24;top=548;right=576;bottom=598;bgcolor=0xE0F0F8;color=0x666666;multiline=1;readonly=1;vscroll=1;z=21};
+txtHostname={cls="static";left=116;top=66;right=580;bottom=84;bgcolor=0xE0F0F8;color=0x666666;z=8};
+txtIp={cls="static";left=116;top=216;right=580;bottom=234;bgcolor=0xE0F0F8;color=0x666666;z=18};
+txtMac={cls="static";left=116;top=243;right=580;bottom=261;bgcolor=0xE0F0F8;color=0x666666;z=20};
+txtMemory={cls="edit";left=24;top=444;right=576;bottom=494;bgcolor=0xE0F0F8;color=0x666666;multiline=1;readonly=1;vscroll=1;z=9};
+txtOffice={cls="static";left=116;top=294;right=580;bottom=312;bgcolor=0xE0F0F8;color=0x666666;z=19};
+txtOfficeDate={cls="static";left=116;top=320;right=580;bottom=338;bgcolor=0xE0F0F8;color=0x666666;z=28};
+txtOsver={cls="static";left=116;top=96;right=580;bottom=114;bgcolor=0xE0F0F8;color=0x666666;z=10};
+txtPcBrand={cls="static";left=116;top=126;right=580;bottom=144;bgcolor=0xE0F0F8;color=0x666666;z=33};
+txtPcId={cls="static";left=116;top=156;right=580;bottom=174;bgcolor=0xE0F0F8;color=0x666666;z=34};
+txtUsed={cls="static";left=84;top=12;right=390;bottom=32;bgcolor=0xE0F0F8;color=0x666666;font=LOGFONT(h=-14);z=7}
+)
+/*}}*/
+
+
+//============================================================
+//  三、状态栏辅助函数
+//============================================================
+//  setStatus(icon, text, color)
+//      设置主状态栏的图标和文字。
+//      参数：icon  FontAwesome 图标字符
+//            text  状态文字
+//            color BGR 颜色值，默认 0x0B86B8（蓝绿）/ 0x666666（灰色）
+//      注意：color 参数同时应用于图标和文字，未传则各自使用默认色
+//
+//  setServerStatus(connected)
+//      设置服务器连接状态的图标和文字。
+//      参数：connected  true=已连接（绿色），false=未连接（灰色）
+//
+//  aardio 颜色规则（BGR 格式）：
+//      0x0000CC 蓝色（错误/失败）
+//      0x008800 绿色（成功/已连接）
+//      0xB8860B 暗金色（进行中）
+//      0x999999 灰色（未连接/默认）
+//      0xFF0000 红色（严重错误）
+//
+//  FontAwesome 常用图标：
+//      \uF058 ✓  成功
+//      \uF057 ✗  失败
+//      \uF110 ⚙  进行中（旋转）
+//      \uF233 🖧  服务器
+//      \uF111 ●  严重警告
+//============================================================
+var setStatus = function(icon, text, color){
+	mainForm.statusIcon.text = icon;
+	mainForm.statusIcon.color = color || 0x0B86B8;
+	mainForm.statusIcon.redraw();
+	mainForm.statusText.text = text;
+	mainForm.statusText.color = color || 0x666666;
+	mainForm.statusText.redraw();
+};
+
+var setServerStatus = function(connected){
+	if(connected) {
+		mainForm.statusServerIcon.color = 0x008800;
+		mainForm.statusServerText.text = '已连接';
+		mainForm.statusServerText.color = 0x008800;
+	}
+	else {
+		mainForm.statusServerIcon.color = 0x999999;
+		mainForm.statusServerText.text = '未连接';
+		mainForm.statusServerText.color = 0x999999;
+	}
+	mainForm.statusServerIcon.redraw();
+	mainForm.statusServerText.redraw();
+};
+
+
+//============================================================
+//  四、状态栏时钟
+//============================================================
+//  启动时立即显示当前时间，然后用 setInterval 每秒刷新。
+//  注意：GUI 主线程可以用 setInterval 定时器（异步不阻塞），
+//       但绝不能 sleep() 阻塞主线程。
+//
+//  time() 返回 time 对象，含 year/month/day/hour/minute/second 字段。
+//  tostring(t) 按 aardio 默认格式输出时间字符串。
+//  setInterval 返回定时器 ID，保存在 mainForm.setStatusTimer 中
+//  以便窗口关闭时自动释放。
+//============================================================
+ var updateTime = function(){
+    var t = time();
+    mainForm.statusTime.text = tostring(t);
+    mainForm.statusTime.redraw();
+};
+updateTime();  // 立即执行一次，避免启动时显示 "--:--:--"
+mainForm.setStatusTimer = mainForm.setInterval(updateTime, 1000);
+
+
+//============================================================
+//  五、edit 控件的字体设置
+//============================================================
+//  edit 控件不支持 skin()（skin 是 plus 控件专有方法）。
+//  背景色用 bgcolor（DSG 中已设置），字体用 font 属性。
+//  LOGFONT 必须用 `::LOGFONT(...)` 全局调用创建字体对象。
+//  name="Microsoft YaHei" 使用微软雅黑，h=-12 表示 12 像素高度。
+//============================================================
+mainForm.txtMemory.bgcolor = 0xE0F0F8;
+mainForm.txtDisk.bgcolor = 0xE0F0F8;
+mainForm.txtMemory.font = ::LOGFONT(name="Microsoft YaHei";h=-12;color=0x666666);
+mainForm.txtDisk.font = ::LOGFONT(name="Microsoft YaHei";h=-12;color=0x666666);
+
+
+//============================================================
+//  六、配置加载与首次使用用户信息录入
+//============================================================
+//  cfg：当前用户配置对象，包含以下字段：
+//      used       使用人姓名
+//      unit       所在单位
+//      dept       部门及位置
+//      serverUrls 自定义服务器地址列表
+//      activeUrl  当前活动服务器地址
+//  hwDataCache：最近一次硬件采集结果缓存，上传按钮使用
+//
+//  updateUsedDisplay()：将"使用人 | 单位 | 部门"拼接显示在顶部
+//
+//  首次使用逻辑：如果 cfg.used 为空，弹出 namedlg 让用户录入信息
+//============================================================
+var cfg = hwinfo.config.load();
+var hwDataCache = null;
+
+
+var updateUsedDisplay = function(){
+	mainForm.txtUsed.text = cfg.used ++ (cfg.unit ? (" | " ++ cfg.unit) : "") ++ (cfg.dept ? (" | " ++ cfg.dept) : "");
+}
+updateUsedDisplay();
+
+// 首次使用：弹出用户信息录入对话框
+if(!cfg.used || cfg.used == "") {
+	var info = hwinfo.namedlg.show(mainForm, cfg.used, cfg.unit, cfg.dept);
+	if(info) {
+		cfg.used = info.used;
+		cfg.unit = info.unit;
+		cfg.dept = info.dept;
+		updateUsedDisplay();
+		hwinfo.config.save(cfg);
+	}
+}
+
+
+//============================================================
+//  七、线程通知器：用于跨线程回调 UI
+//============================================================
+//  thread.command(mainForm) 创建一个线程通知器，将消息发回 mainForm.hwnd 所在线程。
+//  notifier.onXxx 注册回调函数，回调在主线程执行，可以安全访问 UI 控件。
+//
+//  注册的回调：
+//      onFound      服务端被发现并连接成功（由 checkServer 的 ping 线程触发）
+//      onTimeout    服务端探测超时（4 秒后无响应）
+//      onCollectDone 硬件采集完成（由 doCollect 的采集线程触发）
+//      onUploadDone   数据上传完成（由 doUpload 的上传线程触发）
+//
+//  线程间通信方式：
+//      工作线程中：thread.command.send(hwnd, "回调名", 参数...)
+//      主线程中：notifier.onXxx = function(参数){ ... }
+//============================================================
+var defaultServerUrls = hwinfo.config.defaultUrls;
+
+var notifier = thread.command(mainForm);
+
+// onFound：某个服务器地址 ping 成功
+// 参数 url：可达的服务器地址
+// 逻辑：如果已有 activeUrl 则忽略（避免重复触发），否则设为当前活动服务器
+notifier.onFound = function(url){
+	if(cfg.activeUrl && cfg.activeUrl != "") return;
+	cfg.activeUrl = url;
+	// 把新发现的 URL 加入自定义列表（去重检查）
+	var alreadyIn = false;
+	if(cfg.serverUrls && #cfg.serverUrls > 0) {
+		for i = 1; #cfg.serverUrls {
+			if(cfg.serverUrls[i] == url) { alreadyIn = true; break; }
+		}
+	}
+	if(!alreadyIn) {
+		if(!cfg.serverUrls) cfg.serverUrls = {};
+		..table.push(cfg.serverUrls, url);
+	}
+	hwinfo.config.save(cfg);
+	setServerStatus(true);
+	// 提取主机名部分用于状态栏显示，如 "http://192.168.1.100:8080" → "192.168.1.100:8080"
+	var shortUrl = ..string.match(url, "://([^/]+)") || url;
+	setStatus('\uF058', '已连接 ' ++ shortUrl, 0x008800);
+};
+
+// onTimeout：所有服务器地址均无响应
+// 逻辑：仅在无 activeUrl 时才显示未连接（可能之前已连接过）
+notifier.onTimeout = function(){
+	if(!cfg.activeUrl || cfg.activeUrl == "") {
+		setServerStatus(false);
+		setStatus('\uF057', '服务器未连接', 0x999999);
+	}
+};
+
+
+//============================================================
+//  八、checkServer：并行探测所有可用服务器地址
+//============================================================
+//  思路：自定义地址优先，没有则用默认地址，全部并发 ping。
+//  第一个返回 200 的就是活动服务器，通过 onFound 回调设置 cfg.activeUrl。
+//  4 秒后未发现则触发 onTimeout（用单独线程 sleep 4 秒后回调）。
+//
+//  线程间通信用 thread.command.send(hwnd, "回调名", 参数...)。
+//  并发控制：限制同时发起的 ping 线程数量为 5，避免创建过多线程。
+//
+//  URL 合并逻辑：自定义地址在前，默认地址在后（去重）。
+//  这样自定义地址会优先被 ping 到，符合"用户配置优先"原则。
+//============================================================
+var checkServer = function(){
+	setStatus('\uF110', '检测服务器...', 0xB8860B);
+	// 合并自定义地址 + 默认地址（去重）
+	var customUrls = cfg.serverUrls;
+	var urlList = {};
+	if(customUrls && #customUrls > 0) {
+		for i = 1; #customUrls {
+			var u = ..string.trim(customUrls[i]);
+			if(u && u != "") ..table.push(urlList, u);
+		}
+	}
+	// 默认地址追加到末尾（去重检查）
+	for i = 1; #defaultServerUrls {
+		var du = defaultServerUrls[i];
+		var found = false;
+		for j = 1; #urlList {
+			if(urlList[j] == du) { found = true; break; }
+		}
+		if(!found) ..table.push(urlList, du);
+	}
+	// 无可用地址时直接提示
+	if(#urlList == 0) {
+		setServerStatus(false);
+		setStatus('\uF057', '未配置服务器地址', 0x999999);
+		return;
+	}
+	// 清空当前活动地址，准备重新探测
+	cfg.activeUrl = "";
+	var hwnd = mainForm.hwnd;
+	// 并发 ping：最多 5 个线程同时探测
+	var maxConcurrent = 5;
+	for i = 1; #urlList {
+		if(i > maxConcurrent) break;
+		..thread.invoke(
+			function(url, hwnd){
+				import hwinfo.upload;
+				import thread.command;
+				// ping 成功则通知主线程
+				if(hwinfo.upload.ping(url, 3000)) {
+					thread.command.send(hwnd, "onFound", url);
+				}
+			}, urlList[i], hwnd
+		);
+	}
+	// 超时检测线程：4 秒后如果还没有 onFound 回调，则触发 onTimeout
+	..thread.invoke(
+		function(hwnd){
+			import thread.command;
+			sleep(4000);
+			thread.command.send(hwnd, "onTimeout");
+		}, hwnd
+	);
+};
+
+
+
+//============================================================
+//  九、applySkin：按钮皮肤设置
+//============================================================
+//  plus 控件支持 skin() 方法自定义外观。
+//  skin() 参数是一个表，包含 background 和 color 两个子表：
+//      background  背景色，ARGB 格式（0xFF 前缀 + RGB）
+//                  default=默认色, hover=悬停色, active=按下色, disabled=禁用色
+//      color       文字色，ARGB 格式
+//
+//  颜色方案（金色主题）：
+//      主按钮（修改信息、服务器设置、刷新）：0xFFD4A846 金色
+//      上传按钮（强调操作）：0xFFB8860B 深金色
+//      退出按钮（次要操作）：0xFF999999 灰色
+//============================================================
+var applySkin = function(){
+	mainForm.btnEditInfo.skin({
+		background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+		color = {default=0xFFFFFFFF; disabled=0xFF888888}
+	})
+	mainForm.btnServerCfg.skin({
+		background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+		color = {default=0xFFFFFFFF; disabled=0xFF888888}
+	})
+	mainForm.btnRefresh.skin({
+		background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B; disabled=0xFFCCCCCC};
+		color = {default=0xFFFFFFFF; disabled=0xFF888888}
+	})
+	mainForm.btnUpload.skin({
+		background = {default=0xFFB8860B; hover=0xFFC89B1E; active=0xFF9A7009; disabled=0xFFCCCCCC};
+		color = {default=0xFFFFFFFF; disabled=0xFF888888}
+	})
+	mainForm.btnExit.skin({
+		background = {default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777; disabled=0xFFCCCCCC};
+		color = {default=0xFFFFFFFF; disabled=0xFF888888}
+	})
+}
+applySkin();
+
+
+//============================================================
+//  十、updateUI：将采集数据展示到窗体控件
+//============================================================
+//  参数 data：hwinfo.collect.all() 返回的硬件数据表
+//  参数 err：错误信息字符串（采集失败时传入）
+//
+//  数据字段说明：
+//      data.hostname   计算机名
+//      data.osver      操作系统版本
+//      data.pcId       计算机编号（BIOS/主板序列号）
+//      data.pcBrand    计算机品牌
+//      data.ips        IP地址列表（table 或 string）
+//      data.macs       MAC地址列表（table 或 string）
+//      data.office     办公软件名称
+//      data.officeDate 办公软件安装日期
+//      data.antivirus  杀毒软件名称
+//      data.avDate     杀毒软件安装日期
+//      data.memories   内存条列表（table，每项含 model/size）
+//      data.disks      硬盘列表（table，每项含 model/size/serial）
+//      data._debug     调试信息（红色显示在状态栏）
+//
+//  cleanDate 内嵌函数：验证日期格式，非标准格式返回"未获取"
+//============================================================
+var updateUI = function(data, err){
+	// 错误处理：采集失败时在计算机名字段显示错误信息
+	if(err) {
+		mainForm.txtHostname.text = "采集失败：" ++ tostring(err);
+		return;
+	}
+	// 空数据处理
+	if(!data) {
+		mainForm.txtHostname.text = "采集结果为空";
+		return;
+	}
+	// 调试信息：如果数据中包含 _debug 字段，用红色显示在状态栏
+	if(data._debug) {
+		setStatus('\uF111', data._debug, 0xFF0000);
+	}
+	// 缓存采集结果，供上传按钮使用
+	hwDataCache = data;
+	// 基本信息
+	mainForm.txtHostname.text = data.hostname || "未获取";
+	mainForm.txtOsver.text = data.osver || "未获取";
+	mainForm.txtPcId.text = data.pcId || "未获取";
+	mainForm.txtPcBrand.text = data.pcBrand || "未获取";
+	
+	// 网络信息：ips/macs 可能是数组或字符串
+	if(type(data.ips) == "table") {
+		mainForm.txtIp.text = ..string.join(data.ips, ", ");
+	}
+	else {
+		mainForm.txtIp.text = data.ips || "未获取";
+	}
+	
+	if(type(data.macs) == "table") {
+		mainForm.txtMac.text = ..string.join(data.macs, ", ");
+	}
+	else {
+		mainForm.txtMac.text = data.macs || "未获取";
+	}
+	
+	// 日期格式验证函数：只接受 YYYY-MM-DD 格式，其他返回"未获取"
+	var cleanDate = function(s){
+		if(!s || s == "" || s == "未获取") return s;
+		if(..string.match(s, "^\d{4}-\d{2}-\d{2}$")) return s;
+		if(..string.match(s, "^\d{4}-\d{1,2}-\d{1,2}$")) return s;
+		return "未获取";
+	};
+	// 软件信息
+	mainForm.txtOffice.text = data.office || "未获取";
+	mainForm.txtOfficeDate.text = cleanDate(data.officeDate) || "未获取";
+	mainForm.txtAntivirus.text = data.antivirus || "未获取";
+	mainForm.txtAvDate.text = cleanDate(data.avDate) || "未获取";
+	
+	// 内存信息：每条显示"型号 | 容量"
+	if(type(data.memories) == "table") {
+		var lines = {};
+		for i = 1; #data.memories {
+			var m = data.memories[i];
+			if(type(m) == "table") {
+				table.push(lines, (m[["model"]] || "未知") ++ "  |  " ++ (m[["size"]] || "未知"));
+			}
+		}
+		mainForm.txtMemory.text = ..string.join(lines, '\r\n');
+	}
+	else {
+		mainForm.txtMemory.text = data.memories || "未获取";
+	}
+	
+	// 硬盘信息：每条显示"型号 | 容量 | 序列号"
+	if(type(data.disks) == "table") {
+		var lines = {};
+		for i = 1; #data.disks {
+			var d = data.disks[i];
+			if(type(d) == "table") {
+				table.push(lines, (d[["model"]] || "未知") ++ "  |  " ++ (d[["size"]] || "未知") ++ "  |  " ++ (d[["serial"]] || "未知"));
+			}
+		}
+		mainForm.txtDisk.text = ..string.join(lines, '\r\n');
+	}
+	else {
+		mainForm.txtDisk.text = data.disks || "未获取";
+	}
+}
+
+
+//============================================================
+//  十一、doCollect：异步采集硬件信息
+//============================================================
+//  流程：
+//      1. 设置状态为"采集中"，禁用刷新按钮
+//      2. 清空所有显示字段
+//      3. 启动后台线程执行 hwinfo.collect.all()
+//      4. 采集完成后通过 notifier.onCollectDone 回调 UI
+//
+//  为什么用后台线程：hwinfo.collect.all() 涉及 WMI 查询、
+//  注册表读取等耗时操作，如果在主线程执行会阻塞 UI。
+//============================================================
+var doCollect = function(){
+	setStatus('\uF110', '采集中...', 0xB8860B);
+	mainForm.btnRefresh.disabled = true;
+	// 清空所有显示字段
+	mainForm.txtHostname.text = "采集中...";
+	mainForm.txtOsver.text = "";
+	mainForm.txtPcId.text = "";
+	mainForm.txtPcBrand.text = "";
+	mainForm.txtIp.text = "";
+	mainForm.txtMac.text = "";
+	mainForm.txtOffice.text = "";
+	mainForm.txtOfficeDate.text = "";
+	mainForm.txtAntivirus.text = "";
+	mainForm.txtAvDate.text = "";
+	mainForm.txtMemory.text = "";
+	mainForm.txtDisk.text = "";
+	
+	// 后台线程执行采集
+	..thread.invoke(
+		function(hwnd){
+			import hwinfo.collect;
+			import thread.command;
+			var data = hwinfo.collect.all();
+			thread.command.send(hwnd, "onCollectDone", data);
+		}, mainForm.hwnd
+	);
+}
+
+// onCollectDone 回调：采集完成，更新 UI
+notifier.onCollectDone = function(data){
+	mainForm.btnRefresh.disabled = false;
+	if(data && data.error) {
+		updateUI(null, data.error);
+		setStatus('\uF057', '采集失败：' ++ data.error, 0x0000CC);
+		return;
+	}
+	updateUI(data, null);
+	if(!data) {
+		setStatus('\uF057', '采集失败', 0x0000CC);
+	}
+	else {
+		setStatus('\uF058', '采集完成 — ' ++ (data.hostname || ""), 0x0B86B8);
+	}
+};
+
+
+//============================================================
+//  十二、doUpload：异步上传硬件数据到服务器
+//============================================================
+//  参数 hwData：硬件数据表（含 used/unit/dept 等用户信息）
+//  参数 url：服务器地址
+//  参数 hwnd：主窗体句柄，用于线程间通信
+//
+//  流程：
+//      1. 启动后台线程执行 hwinfo.upload.send(hwData, url)
+//      2. 上传完成后通过 notifier.onUploadDone 回调 UI
+//============================================================
+var doUpload = function(hwData, url, hwnd){
+	..thread.invoke(
+		function(hwData, url, hwnd){
+			import hwinfo.upload;
+			import thread.command;
+			var result = hwinfo.upload.send(hwData, url);
+			thread.command.send(hwnd, "onUploadDone", result);
+		}, hwData, url, hwnd
+	)
+}
+
+// onUploadDone 回调：上传完成，根据返回码显示结果
+// result.code == 0 → 上传成功
+// result.code == 1 → 记录已存在（无需重复上传）
+// 其他 → 上传失败，显示错误信息
+notifier.onUploadDone = function(result){
+	mainForm.btnUpload.disabled = false;
+	mainForm.btnUpload.text = "上传信息";
+	if(result[["code"]] == 0) {
+		setStatus('\uF058', '上传成功', 0x008800);
+		setServerStatus(true);
+		mainForm.msgbox("上传成功");
+	}
+	elseif(result[["code"]] == 1) {
+		setStatus('\uF058', '记录已存在', 0xB8860B);
+		setServerStatus(true);
+		mainForm.msgbox("记录已存在，无需重复上传");
+	}
+	else {
+		setStatus('\uF057', '上传失败', 0x0000CC);
+		mainForm.msgbox(result[["msg"]] || "上传失败");
+	}
+};
+
+
+//============================================================
+//  十三、按钮事件处理
+//============================================================
+
+// btnEditInfo：修改使用人信息
+// 弹出 namedlg 对话框，允许修改使用人、单位、部门
+mainForm.btnEditInfo.oncommand = function(id, event){
+	var info = hwinfo.namedlg.show(mainForm, cfg.used, cfg.unit, cfg.dept);
+	if(info) {
+		cfg.used = info.used;
+		cfg.unit = info.unit;
+		cfg.dept = info.dept;
+		updateUsedDisplay();
+		hwinfo.config.save(cfg);
+	}
+}
+
+// btnServerCfg：服务器设置弹窗
+// 弹出模态对话框，允许用户编辑服务器地址列表
+// 保存后自动重新探测服务器
+mainForm.btnServerCfg.oncommand = function(id, event){
+	// 创建设置弹窗（模态对话框，parent=mainForm）
+	var dlg = ..win.form(
+		text="服务器设置"; parent=mainForm; border="dialog window";
+		bgcolor=0xE0F0F8; right=439; bottom=299; center=1; mode="popup"
+	)
+	dlg.add(
+		lblUrl={cls="static"; text="服务器地址（每行一个）："; left=16; top=12; right=260; bottom=32; bgcolor=0xE0F0F8;color=0x0B86B8; font=LOGFONT(h=-14)};
+		editUrls={cls="edit"; left=16; top=36; right=420; bottom=210; bgcolor=0xFFFFFF; color=0x666666; multiline=1; vscroll=1; font=LOGFONT(h=-13); z=1};
+		lblHint={cls="static"; text="留空则使用内置默认地址，自定义地址优先探测"; left=16; top=216; right=420; bottom=236; bgcolor=0xE0F0F8;color=0x999999; font=LOGFONT(h=-12)};
+		btnOk={cls="plus"; text="确定"; left=140; top=248; right=230; bottom=280; z=2};
+		btnCancel={cls="plus"; text="取消"; left=250; top=248; right=340; bottom=280; z=3}
+	)
+	// 填充当前服务器地址到编辑框
+	var urlText = "";
+	for i = 1; #cfg.serverUrls {
+		if(urlText != "") urlText = urlText ++ '\r\n';
+		urlText = urlText ++ cfg.serverUrls[i];
+	}
+	dlg.editUrls.text = urlText;
+	
+	// 弹窗按钮皮肤（金色主题）
+	dlg.btnOk.skin({
+		background = {default=0xFFD4A846; hover=0xFFE0B84E; active=0xFFB8860B};
+		color = {default=0xFFFFFFFF}
+	})
+	dlg.btnCancel.skin({
+		background = {default=0xFF999999; hover=0xFFAAAAAA; active=0xFF777777};
+		color = {default=0xFFFFFFFF}
+	})
+	
+	// 确定：解析编辑框内容，保存配置，重新探测服务器
+	dlg.btnOk.oncommand = function(id, event){
+		var text = dlg.editUrls.text;
+		var lines = ..string.split(text, '\n');
+		var urls = {};
+		for i = 1; #lines {
+			var u = ..string.trim(lines[i]);
+			if(u && u != "") ..table.push(urls, u);
+		}
+		cfg.serverUrls = urls;
+		cfg.activeUrl = "";  // 清空活动地址，强制重新探测
+		hwinfo.config.save(cfg);
+		dlg.close();
+		checkServer();  // 保存后立即重新探测
+	}
+	// 取消：关闭弹窗
+	dlg.btnCancel.oncommand = function(id, event){
+		dlg.close();
+	}
+	dlg.doModal();
+}
+
+// btnRefresh：刷新硬件信息（重新采集）
+mainForm.btnRefresh.oncommand = function(id, event){
+	doCollect();
+}
+
+// btnUpload：上传硬件信息到服务器
+// 前置检查：使用人、单位、部门、采集数据、服务器地址均不能为空
+mainForm.btnUpload.oncommand = function(id, event){
+	// 逐项检查必填信息
+	if(!cfg.used || cfg.used == "") {
+		mainForm.msgbox("请先输入使用人姓名");
+		return;
+	}
+	if(!cfg.unit || cfg.unit == "") {
+		mainForm.msgbox("请先选择所在单位");
+		return;
+	}
+	if(!cfg.dept || cfg.dept == "") {
+		mainForm.msgbox("请先输入部门及位置");
+		return;
+	}
+	if(!hwDataCache) {
+		mainForm.msgbox("请先采集硬件信息");
+		return;
+	}
+	
+	// 确定上传地址：优先使用活动地址，其次使用自定义列表第一个
+	var uploadUrl = cfg.activeUrl;
+	if(!uploadUrl || uploadUrl == "") {
+		uploadUrl = cfg.serverUrls[1] || "";
+	}
+	if(!uploadUrl || uploadUrl == "") {
+		setStatus('\uF057', '未配置服务器地址', 0x999999);
+		mainForm.msgbox("未配置服务器地址，请先设置服务器");
+		return;
+	}
+	
+	// 禁用上传按钮，防止重复点击
+	mainForm.btnUpload.disabled = true;
+	mainForm.btnUpload.text = "上传中...";
+	setStatus('\uF110', '上传中...', 0xB8860B);
+	
+	// 将用户信息合并到硬件数据中
+	var hwData = hwDataCache;
+	hwData.used = cfg.used;
+	hwData.unit = cfg.unit;
+	hwData.dept = cfg.dept;
+	var url = uploadUrl;
+	doUpload(hwData, url, mainForm.hwnd);
+}
+
+// btnExit：退出程序
+mainForm.btnExit.oncommand = function(id, event){
+	mainForm.close();
+}
+
+// grpBasic：基本信息分组框（无特殊事件处理）
+mainForm.grpBasic.oncommand = function(id,event){
+	
+}
+
+
+//============================================================
+//  十四、启动流程
+//============================================================
+//  执行顺序：
+//      1. doCollect()    启动后台硬件采集（异步，不阻塞）
+//      2. mainForm.show() 显示主窗体
+//      3. checkServer()  启动后台服务器探测（异步，不阻塞）
+//      4. win.loopMessage() 进入消息循环，阻塞直到窗口关闭
+//
+//  注意：doCollect 和 checkServer 都是异步的，
+//  它们通过 thread.command 回调更新 UI，不会阻塞主线程。
+//  win.loopMessage() 是 aardio GUI 程序的标准退出方式，
+//  它会阻塞直到所有窗口关闭。
+//============================================================
+doCollect();
+
+mainForm.show();
+checkServer();
+..win.loopMessage();
