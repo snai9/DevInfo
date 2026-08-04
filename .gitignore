@@ -25,3 +25,4 @@ upload_skill*.py
 .build/
 dist/
 aardio-dev-skill-master/
+linux_client_go/bin/
