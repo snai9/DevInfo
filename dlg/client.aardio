@@ -7,7 +7,7 @@ import hwinfo.collect;
 import hwinfo.upload;
 import hwinfo.namedlg;
 /*DSG{{*/
-var mainForm = win.form(text="XX单位资产信息采集系统";right=599;bottom=689;bgcolor=0xE0F0F8;border="dialog frame";center=1)
+var mainForm = win.form(text="资产信息采集系统";right=599;bottom=689;bgcolor=0xE0F0F8;border="dialog frame";center=1)
 mainForm.add(
 btnEditInfo={cls="plus";text="修改信息";left=398;top=8;right=490;bottom=34;z=22};
 btnExit={cls="plus";text="退出";left=512;top=623;right=590;bottom=655;z=26};
@@ -63,9 +63,9 @@ var setStatus = function(icon, text, color){
 
 var setServerStatus = function(connected,serverAddr){
 	if(connected) {
-		mainForm.statusServerIcon.color = 0x008800;
+		mainForm.statusServerIcon.argbColor = 0xFF008800;
 		mainForm.statusServerText.text = serverAddr ? ('已连接 ' ++ serverAddr) : '已连接';
-		mainForm.statusServerText.color = 0x008800;
+		mainForm.statusServerText.argbColor = 0xFF008800;
 	}
 	else {
 		mainForm.statusServerIcon.color = 0x999999;
