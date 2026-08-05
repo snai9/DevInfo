@@ -9,7 +9,7 @@ import (
 var DefaultURLs = []string{
 	"http://10.44.179.88:8080",
 	"http://10.130.175.88:8080",
-	"http://127.0.0.1:8080",
+	"http://172.16.0.88:8080",
 }
 
 type Config struct {

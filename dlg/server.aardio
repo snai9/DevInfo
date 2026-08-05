@@ -16,25 +16,25 @@ var winform = win.form(text="硬件信息管理 — 服务端";right=959;bottom=
 winform.add(
 btnDelete={cls="plus";text="删除选中";left=140;top=524;right=260;bottom=552;db=1;dl=1;z=9};
 btnEdit={cls="plus";text="编辑选中";left=20;top=524;right=132;bottom=552;bgcolor=0xE0F0F8;db=1;dl=1;z=8};
-	btnExport={cls="plus";text="导出";left=720;top=524;right=828;bottom=552;db=1;dr=1;z=11};
-	btnLog={cls="plus";text="操作日志";left=610;top=524;right=710;bottom=552;db=1;dr=1;z=17};
-	btnRefresh={cls="plus";text="刷新记录";left=836;top=524;right=944;bottom=552;db=1;dr=1;z=10};
+btnExport={cls="plus";text="导出";left=720;top=524;right=828;bottom=552;db=1;dr=1;z=11};
+btnLog={cls="plus";text="操作日志";left=610;top=524;right=710;bottom=552;db=1;dr=1;z=17};
+btnRefresh={cls="plus";text="刷新记录";left=836;top=524;right=944;bottom=552;db=1;dr=1;z=10};
+btnSearch={cls="plus";text="搜索";left=706;top=48;right=780;bottom=72;dl=1;dt=1;z=15};
 btnStart={cls="plus";text="启动服务";left=196;top=10;right=300;bottom=38;bgcolor=0xE0F0F8;dl=1;dt=1;z=5};
 btnStop={cls="plus";text="停止服务";left=308;top=10;right=412;bottom=38;bgcolor=0xE0F0F8;disabled=1;dl=1;dt=1;z=6};
 cmbUnit={cls="combobox";left=24;top=48;right=200;bottom=72;color=0x666666;dl=1;dt=1;edge=1;items={"全部"};mode="";z=12};
 editPort={cls="plus";left=92;top=10;right=180;bottom=38;dl=1;dt=1;edge=1;editable=1;font=LOGFONT(h=-14);textPadding={top=6;bottom=2};z=4};
+editSearch={cls="edit";left=320;top=48;right=700;bottom=72;color=0x666666;dl=1;dt=1;edge=1;font=LOGFONT(h=-13);z=14};
 grpRecords={cls="groupbox";text="已收集的硬件信息记录";left=12;top=76;right=948;bottom=556;color=0x0B86B8;db=1;dl=1;dr=1;dt=1;font=LOGFONT(h=-13);z=2};
 lblPort={cls="static";text="监听端口：";left=16;top=14;right=88;bottom=34;bgcolor=0xE0F0F8;color=0x0B86B8;dl=1;dt=1;font=LOGFONT(h=-14);z=3};
+lblSearch={cls="static";text="关键词：";left=250;top=50;right=316;bottom=70;color=0x0B86B8;dl=1;dt=1;z=16};
 lblStatus={cls="static";text="状态：未启动";left=420;top=14;right=940;bottom=34;bgcolor=0xE0F0F8;color=0x999999;dl=1;dr=1;dt=1;font=LOGFONT(h=-14);z=1};
-	lblUnit={cls="static";text="按单位筛选：";left=24;top=50;right=110;bottom=70;color=0x0B86B8;dl=1;dt=1;z=13};
-	editSearch={cls="edit";left=320;top=48;right=700;bottom=72;color=0x666666;dl=1;dt=1;edge=1;font=LOGFONT(h=-13);z=14};
-	btnSearch={cls="plus";text="搜索";left=706;top=48;right=780;bottom=72;dl=1;dt=1;z=15};
-	lblSearch={cls="static";text="关键词：";left=250;top=50;right=316;bottom=70;color=0x0B86B8;dl=1;dt=1;z=16};
+lblUnit={cls="static";text="按单位筛选：";left=24;top=50;right=110;bottom=70;color=0x0B86B8;dl=1;dt=1;z=13};
 vlist={cls="vlistEx";left=24;top=92;right=936;bottom=516;ah=1;aw=1;bgcolor=0xE0F0F8;db=1;dl=1;dr=1;dt=1;edge=1;z=7}
 )
 /*}}*/
 
-winform.editPort.text = "8080";
+winform.editPort.text = "1414";
 
 var serverMain;
 var dbPath = io.appData("hwinfo/hwinfo.db");

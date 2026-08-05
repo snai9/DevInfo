@@ -33,10 +33,10 @@ handle = function(response, request, session){
 // 启动局域网 HTTP 服务（手动启停、固定端口）
 start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 	if(!ip) ip = "0.0.0.0";
-	if(!port) port = 8080;
+	if(!port) port = 1414;
 	if(!_dbPath) _dbPath = ..io.appData("hwinfo/hwinfo.db");
 	
-	// app 必须是“纯函数”：内部再定义路由子过程，避免跨线程自由变量失效
+	// 注意：app 必须是纯函数，路由子过程必须定义在内部（跨线程自由变量会失效）
 	var app = function(response, request, session){
 		response.contentType = "application/json";
 		
@@ -139,27 +139,37 @@ start = function(ip, port, _dbPath, _notifierHwnd, onStatus){
 		writeError("404 Not Found", -1, "Not Found");
 	}
 	
-	var serverMain = ..wsock.tcp.simpleHttpServer.mainThread(app);
+var serverMain;
+	var ok, errMsg;
+	var maxTry = 50;
+	var realPort = port;
 	
-	serverMain.threadGlobal = {
-		dbPath = _dbPath;
-		notifierHwnd = _notifierHwnd;
-	};
-	serverMain.threadNum = 4;
-	
-	var ok, errMsg = serverMain.start(ip, port);
+	for(i = 1, maxTry, 1) {
+		var tryPort = port + i - 1;
+		serverMain = ..wsock.tcp.simpleHttpServer.mainThread(app);
+		serverMain.threadGlobal = {
+			dbPath = _dbPath;
+			notifierHwnd = _notifierHwnd;
+		};
+		serverMain.threadNum = 4;
+		ok, errMsg = serverMain.start(ip, tryPort);
+		if(ok) {
+			realPort = tryPort;
+			break;
+		}
+	}
 	
 	import hwserver.log;
 	if(ok) {
-		hwserver.log.info("服务启动", "端口=" .. tostring(port));
+		hwserver.log.info("服务启动", "端口=" ++ tostring(realPort));
 	}
 	else {
-		hwserver.log.err("服务启动失败", errMsg || "未知错误");
+		hwserver.log.err("服务启动失败", "端口范围 " ++ tostring(port) ++ "~" ++ tostring(port + maxTry - 1) ++ " 均被占用");
 	}
 	
 	if(onStatus) {
 		if(ok) onStatus(true, "服务已启动：" ++ serverMain.getUrl());
-		else onStatus(false, "启动失败：" ++ (errMsg || "未知错误"));
+		else onStatus(false, "启动失败：可用端口已用完（" ++ tostring(port) ++ "~" ++ tostring(port + maxTry - 1) ++ "）");
 	}
 	
 	return serverMain, ok, errMsg;

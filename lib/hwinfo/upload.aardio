@@ -1,4 +1,5 @@
 import web.rest.jsonClient;
+import wsock.tcp.client;
 
 namespace hwinfo.upload;
 
@@ -34,7 +35,7 @@ var extractErrMsg = function(http, defaultMsg){
 	return defaultMsg;
 };
 
-// 上传硬件信息；serverUrl 形如 http://host:8080
+// 上传硬件信息；serverUrl 形如 http://host:1414
 send = function(data, serverUrl){
 	if(!serverUrl || serverUrl == "") {
 		return {code=-1; msg="未配置服务器地址"};
@@ -81,16 +82,32 @@ send = function(data, serverUrl){
 	return resp;
 }
 
-// 探测服务器是否可达
+// 探测服务器是否可达（先 TCP 测端口，再 HTTP GET 优先）
 ping = function(serverUrl, timeoutMs){
 	if(!serverUrl || serverUrl == "") return false;
 	if(!timeoutMs) timeoutMs = 3000;
 
+	// 阶段1：TCP 端口检测
+	var host, port = ..string.match(serverUrl, "://([^\:]+)\:(\d+)");
+	if(!host) {
+		host = ..string.match(serverUrl, "://([^/]+)");
+		port = "80";
+	}
+	var tcpOk = ..wsock.tcp.client.test(host, ..tonumber(port), timeoutMs / 1000);
+	if(!tcpOk) return false;
+
+	// 阶段2：HTTP ping，GET 优先
 	var http = createClient("hwinfo-ping", timeoutMs, timeoutMs, timeoutMs);
+	try {
+		http.get(serverUrl ++ "/api/ping");
+	} catch(ex) {
+	}
+	if(http.lastStatusCode >= 200 && http.lastStatusCode < 300) return true;
+
+	// GET 不行再 fallback 到 POST
 	try {
 		http.post(serverUrl ++ "/api/ping", {});
 	} catch(ex) {
-		// 状态码仍可能是 2xx；以 ok/status 为准
 	}
-	return http.ok() || (http.lastStatusCode >= 200 && http.lastStatusCode < 300);
+	return http.lastStatusCode >= 200 && http.lastStatusCode < 300;
 }

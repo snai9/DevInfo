@@ -104,44 +104,90 @@ func Ping(serverURL string, timeoutMs int) bool {
 
 	pingURL := strings.TrimRight(serverURL, "/") + "/api/ping"
 	timeout := time.Duration(timeoutMs) * time.Millisecond
+
+	// 先用 GET 轻量探测（更快更稳）
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Get(pingURL)
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return true
+		}
+	}
+
+	// GET 不行再试 POST（兼容旧版本）
 	status, _ := postJSON(pingURL, map[string]interface{}{}, timeout)
 	return status >= 200 && status < 300
 }
 
-func FindActiveServer(urls []string) string {
-	if len(urls) == 0 {
-		return ""
+var defaultServerIPs = []string{
+	"10.44.179.88",
+	"10.130.175.88",
+	"172.16.0.88",
+	"10.27.0.1",
+}
+
+const basePort = 1414
+const maxRounds = 2
+
+func FindActiveServer(urls []string, cachedURL string) (string, bool) {
+	// 1. 先试缓存的地址，通了直接用（最快路径）
+	if cachedURL != "" && Ping(cachedURL, 2000) {
+		return cachedURL, true
 	}
 
-	localPrefixes := getLocalIPPrefixes()
-
-	// 第一优先级：同网段且可达
-	for _, u := range urls {
-		u = strings.TrimSpace(u)
-		if u == "" {
-			continue
-		}
-		if isSameSubnet(u, localPrefixes) && Ping(u, 1500) {
-			return u
-		}
-	}
-
-	// 第二优先级：可达即可
-	for _, u := range urls {
-		u = strings.TrimSpace(u)
-		if u != "" && Ping(u, 1500) {
-			return u
+	// 2. 按规则探测：4个固定IP，从 basePort 开始，最多两轮（basePort, basePort+1）
+	for round := 0; round < maxRounds; round++ {
+		port := basePort + round
+		for _, ip := range defaultServerIPs {
+			// 先用 TCP 快速测端口通不通（比HTTP快很多）
+			if !tcpPing(ip, port, 800) {
+				continue
+			}
+			// 端口通了，再测 HTTP 接口（放宽超时到2秒）
+			url := fmt.Sprintf("http://%s:%d", ip, port)
+			if Ping(url, 2000) {
+				return url, true
+			}
 		}
 	}
 
-	// 都不可达，返回第一个
-	for _, u := range urls {
-		u = strings.TrimSpace(u)
-		if u != "" {
-			return u
+	// 3. 都探测不到，返回空和 false
+	return "", false
+}
+
+// tcpPing 快速测试TCP端口是否可达
+func tcpPing(ip string, port int, timeoutMs int) bool {
+	addr := fmt.Sprintf("%s:%d", ip, port)
+	conn, err := net.DialTimeout("tcp", addr, time.Duration(timeoutMs)*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// DiagnoseServers 诊断各服务器的连通状态，用于错误提示
+func DiagnoseServers() string {
+	var lines []string
+	for round := 0; round < maxRounds; round++ {
+		port := basePort + round
+		for _, ip := range defaultServerIPs {
+			tcpOk := tcpPing(ip, port, 400)
+			status := "  ✗ 端口不通"
+			if tcpOk {
+				// TCP通了再测HTTP
+				url := fmt.Sprintf("http://%s:%d", ip, port)
+				if Ping(url, 600) {
+					status = "  ✓ 服务正常"
+				} else {
+					status = "  △ 端口通但服务未响应"
+				}
+			}
+			lines = append(lines, fmt.Sprintf("  %s:%d%s", ip, port, status))
 		}
 	}
-	return ""
+	return strings.Join(lines, "\n")
 }
 
 func getLocalIPPrefixes() []string {

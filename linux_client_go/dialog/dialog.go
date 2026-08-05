@@ -94,7 +94,8 @@ func YesNo(title, text string) bool {
 }
 
 type Progress struct {
-	cmd *exec.Cmd
+	cmd   *exec.Cmd
+	title string
 }
 
 func ShowProgress(title, text string) *Progress {
@@ -117,7 +118,37 @@ func ShowProgress(title, text string) *Progress {
 	if cmd != nil {
 		cmd.Start()
 	}
-	return &Progress{cmd: cmd}
+	return &Progress{cmd: cmd, title: title}
+}
+
+func (p *Progress) SetText(text string) {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return
+	}
+	// 关掉旧进度条，开一个新的
+	p.cmd.Process.Kill()
+	p.cmd.Wait()
+
+	var cmd *exec.Cmd
+	switch engine {
+	case "kdialog":
+		cmd = exec.Command("kdialog",
+			"--title", p.title,
+			"--progressbar", text, "0",
+		)
+	case "zenity":
+		cmd = exec.Command("zenity", "--progress",
+			"--title="+p.title,
+			"--text="+text,
+			"--pulsate",
+			"--auto-close",
+			"--width=400",
+		)
+	}
+	if cmd != nil {
+		cmd.Start()
+	}
+	p.cmd = cmd
 }
 
 func (p *Progress) Close() {

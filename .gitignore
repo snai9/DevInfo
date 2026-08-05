@@ -26,3 +26,9 @@ upload_skill*.py
 dist/
 aardio-dev-skill-master/
 linux_client_go/bin/
+linux_client_go/资产信息采集系统
+dlg/*.aa.bak.*
+dlg/*.aa.rbk.*
+lib/hwinfo/*.aa.bak.*
+lib/hwserver/*.aa.bak.*
+lib/hwserver/*.aa.rbk.*

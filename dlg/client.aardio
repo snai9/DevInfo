@@ -32,9 +32,9 @@ lblPcId={cls="static";text="计算机编号：";left=24;top=156;right=110;bottom
 lblUsed={cls="static";text="使用人：";left=16;top=12;right=80;bottom=32;bgcolor=0xE0F0F8;color=0x666666;font=LOGFONT(h=-14);z=2};
 statusIcon={cls="bkplus";text='\uF058';left=10;top=668;right=30;bottom=688;color=0x0B86B8;db=1;dl=1;font=LOGFONT(h=-14;name='FontAwesome');z=35};
 statusLine={cls="bkplus";left=0;top=660;right=600;bottom=662;bgcolor=0xD4A846;db=1;dl=1;dr=1;z=39};
-statusServerIcon={cls="bkplus";text='\uF233';left=340;top=668;right=360;bottom=688;color=0x999999;db=1;font=LOGFONT(name='FontAwesome');z=37};
-statusServerText={cls="bkplus";text="未连接";left=362;top=668;right=470;bottom=688;align="left";color=0x999999;db=1;z=40};
-statusText={cls="bkplus";text="就绪";left=34;top=668;right=340;bottom=688;align="left";color=0x666666;db=1;dl=1;z=36};
+statusServerIcon={cls="bkplus";text='\uF233';left=254;top=668;right=274;bottom=688;color=0x999999;db=1;font=LOGFONT(name='FontAwesome');z=37};
+statusServerText={cls="bkplus";text="未连接";left=273;top=668;right=455;bottom=688;align="left";color=0x999999;db=1;z=40};
+statusText={cls="bkplus";text="就绪";left=34;top=668;right=230;bottom=688;align="left";color=0x666666;db=1;dl=1;z=36};
 statusTime={cls="bkplus";text="--:--:--";left=472;top=668;right=590;bottom=688;align="right";color=0x999999;db=1;dr=1;z=38};
 txtAntivirus={cls="static";left=116;top=346;right=580;bottom=364;bgcolor=0xE0F0F8;color=0x666666;z=14};
 txtAvDate={cls="static";left=116;top=372;right=580;bottom=390;bgcolor=0xE0F0F8;color=0x666666;z=32};
@@ -61,10 +61,10 @@ var setStatus = function(icon, text, color){
 	mainForm.statusText.redraw();
 };
 
-var setServerStatus = function(connected){
+var setServerStatus = function(connected,serverAddr){
 	if(connected) {
 		mainForm.statusServerIcon.color = 0x008800;
-		mainForm.statusServerText.text = '已连接';
+		mainForm.statusServerText.text = serverAddr ? ('已连接 ' ++ serverAddr) : '已连接';
 		mainForm.statusServerText.color = 0x008800;
 	}
 	else {
@@ -129,9 +129,11 @@ notifier.onFound = function(url){
 		..table.push(cfg.serverUrls, url);
 	}
 	hwinfo.config.save(cfg);
-	setServerStatus(true);
-	var shortUrl = ..string.match(url, "://([^/]+)") || url;
-	setStatus('\uF058', '已连接 ' ++ shortUrl, 0x008800);
+	
+	var shortUrl = ..string.match(url, "\://([^/]+)") || url;
+	setServerStatus(true, shortUrl);
+	
+	setStatus('\uF058', '已连接' ++ shortUrl, 0x008800);
 };
 notifier.onTimeout = function(){
 	if(!cfg.activeUrl || cfg.activeUrl == "") {
@@ -166,9 +168,7 @@ var checkServer = function(){
 	}
 	cfg.activeUrl = "";
 	var hwnd = mainForm.hwnd;
-	var maxConcurrent = 5;
 	for i = 1; #urlList {
-		if(i > maxConcurrent) break;
 		..thread.invoke(
 			function(url, hwnd){
 				import hwinfo.upload;
@@ -335,6 +335,7 @@ var doUpload = function(hwData, url, hwnd){
 			import hwinfo.upload;
 			import thread.command;
 			var result = hwinfo.upload.send(hwData, url);
+			result._uploadUrl = url;
 			thread.command.send(hwnd, "onUploadDone", result);
 		}, hwData, url, hwnd
 	);
@@ -343,15 +344,25 @@ var doUpload = function(hwData, url, hwnd){
 notifier.onUploadDone = function(result){
 	mainForm.btnUpload.disabled = false;
 	mainForm.btnUpload.text = "上传信息";
-	if(result[["code"]] == 0) {
-		setStatus('\uF058', '上传成功', 0x008800);
+	if(result[["code"]] == 0 || result[["code"]] == 1) {
+		// 上传成功，记录当前服务器地址
+		var uploadUrl = result[["_uploadUrl"]] || "";
+		if(uploadUrl != "" && cfg.activeUrl != uploadUrl) {
+			cfg.activeUrl = uploadUrl;
+			hwinfo.config.save(cfg);
+		}
 		setServerStatus(true);
-		mainForm.msgbox("上传成功");
-	}
-	elseif(result[["code"]] == 1) {
-		setStatus('\uF058', '记录已存在', 0xB8860B);
-		setServerStatus(true);
-		mainForm.msgbox("记录已存在，无需重复上传");
+		var shortUrl = ..string.match(cfg.activeUrl, "\://([^/]+)") || cfg.activeUrl;
+		setServerStatus(true, shortUrl);
+
+		setStatus('\uF058', '已连接 ' ++ shortUrl, 0x008800);
+		if(result[["code"]] == 0) {
+			mainForm.msgbox("上传成功");
+		}
+		else {
+			setStatus('\uF058', '记录已存在', 0xB8860B);
+			mainForm.msgbox("记录已存在，无需重复上传");
+		}
 	}
 	else {
 		setStatus('\uF057', '上传失败', 0x0000CC);

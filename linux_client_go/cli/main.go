@@ -10,8 +10,39 @@ import (
 	"hwinfo-client/uploader"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
+
+type serverResult struct {
+	URL string
+	OK  bool
+}
+
+var logFile *os.File
+
+func startLog() string {
+	home, _ := os.UserHomeDir()
+	logDir := filepath.Join(home, ".config", "hwinfo")
+	os.MkdirAll(logDir, 0755)
+	logPath := filepath.Join(logDir, "run.log")
+	f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err == nil {
+		logFile = f
+	}
+	return logPath
+}
+
+func logMsg(msg string) {
+	ts := time.Now().Format("2006-01-02 15:04:05.000")
+	line := fmt.Sprintf("[%s] %s\n", ts, msg)
+	fmt.Print(line)
+	if logFile != nil {
+		logFile.WriteString(line)
+		logFile.Sync()
+	}
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -53,13 +84,75 @@ func guiMain() {
 		os.Exit(1)
 	}
 
+	// 启动日志
+	logPath := startLog()
+	logMsg("程序启动")
+
+	// 立刻弹出进度框（给用户反馈，不白屏）
+	prog := dialog.ShowProgress("资产信息采集系统", "正在初始化...")
+
+	// 并发：采集硬件 + 探测服务器
+	type hwResult struct {
+		data *collector.HWData
+		cost int64
+	}
+	hwCh := make(chan hwResult, 1)
+	serverCh := make(chan serverResult, 1)
+
+	start := time.Now().UnixMilli()
+	go func() {
+		t0 := time.Now().UnixMilli()
+		d := collector.All()
+		cost := time.Now().UnixMilli() - t0
+		logMsg(fmt.Sprintf("硬件采集完成，耗时 %d ms", cost))
+		hwCh <- hwResult{data: d, cost: cost}
+	}()
+
 	cfg := config.Load()
-	data := collector.All()
+
+	go func() {
+		t0 := time.Now().UnixMilli()
+		url, ok := uploader.FindActiveServer(cfg.ServerURLs, cfg.ActiveURL)
+		cost := time.Now().UnixMilli() - t0
+		logMsg(fmt.Sprintf("服务器探测完成，结果: %v (url=%s)，耗时 %d ms", ok, url, cost))
+		serverCh <- serverResult{URL: url, OK: ok}
+	}()
+
+	// 等硬件采集（快的那个先到）
+	prog.SetText("正在采集硬件信息...")
+	hw := <-hwCh
+	totalHW := time.Now().UnixMilli() - start
+	logMsg(fmt.Sprintf("硬件就绪，总耗时 %d ms", totalHW))
+
+	data := hw.data
 	data.Used = cfg.Used
 	data.Unit = cfg.Unit
 	data.Dept = cfg.Dept
 
+	// 等服务器探测（可能比硬件慢）
+	prog.SetText("正在连接服务器...")
+	var sr serverResult
+	select {
+	case sr = <-serverCh:
+	case <-time.After(10 * time.Second):
+		sr = serverResult{URL: "", OK: false}
+		logMsg("服务器探测超时（10秒）")
+	}
+	totalAll := time.Now().UnixMilli() - start
+	logMsg(fmt.Sprintf("全部就绪，总耗时 %d ms", totalAll))
+	prog.Close()
+
+	if !sr.OK {
+		diagnosis := uploader.DiagnoseServers()
+		dialog.Error("无法连接服务器",
+			fmt.Sprintf("未能探测到可用的服务器地址。\n\n诊断结果：\n%s\n\n请联系管理员：\n  1. 确认服务器程序是否已启动\n  2. 确认防火墙是否开放 1414/1415 端口\n  3. 确认服务器IP和端口是否正确\n\n日志文件：%s", diagnosis, logPath))
+		logMsg("服务器探测失败，退出")
+		return
+	}
+	cfg.ActiveURL = sr.URL
+
 	if !guiConfirmEdit(data, cfg) {
+		logMsg("用户取消")
 		return
 	}
 
@@ -68,11 +161,12 @@ func guiMain() {
 	cfg.Dept = data.Dept
 	cfg.Save()
 
-	prog := dialog.ShowProgress("资产信息采集系统", "正在上传到服务器，请稍候...")
+	prog = dialog.ShowProgress("资产信息采集系统", "正在上传到服务器，请稍候...")
 	result := uploader.Send(data, cfg.ActiveURL)
 	prog.Close()
 
 	uploader.PrintResult(result)
+	logMsg(fmt.Sprintf("上传结果: code=%d msg=%s", result.Code, result.Msg))
 
 	switch result.Code {
 	case 0:
@@ -85,9 +179,6 @@ func guiMain() {
 }
 
 func guiConfirmEdit(data *collector.HWData, cfg *config.Config) bool {
-	if cfg.ActiveURL == "" {
-		cfg.ActiveURL = uploader.FindActiveServer(cfg.ServerURLs)
-	}
 
 	var errMsg string
 	for {

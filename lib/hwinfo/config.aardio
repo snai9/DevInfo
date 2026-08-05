@@ -3,7 +3,7 @@ import JSON;
 
 namespace hwinfo.config;
 
-defaultUrls = {"http://10.44.179.88:8080";"http://10.130.175.88:8080";"http://127.0.0.1:8080"};
+defaultUrls = {"http://10.44.179.88:1414";"http://10.130.175.88:1414";"http://172.16.0.88:1414";"http://127.0.0.1:1414";"http://10.44.179.88:1415";"http://10.130.175.88:1415";"http://172.16.0.88:1415";"http://127.0.0.1:1415"};
 
 load = function(){
 	var path = ..io.appData("hwinfo/config.json");
