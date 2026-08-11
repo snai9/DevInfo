@@ -1,13 +1,12 @@
 import win.ui;
 import fonts.fontAwesome;
 import thread.command;
-
 import hwinfo.config;
 import hwinfo.collect;
 import hwinfo.upload;
 import hwinfo.namedlg;
 /*DSG{{*/
-var mainForm = win.form(text="资产信息采集系统";right=599;bottom=689;bgcolor=0xE0F0F8;border="dialog frame";center=1)
+var mainForm = win.form(text="当阳人社局资产信息采集系统     技术支持：信息中心 杨东    QQ:3190521314";right=599;bottom=689;bgcolor=0xE0F0F8;border="dialog frame";center=1)
 mainForm.add(
 btnEditInfo={cls="plus";text="修改信息";left=398;top=8;right=490;bottom=34;z=22};
 btnExit={cls="plus";text="退出";left=512;top=623;right=590;bottom=655;z=26};
@@ -68,9 +67,9 @@ var setServerStatus = function(connected,serverAddr){
 		mainForm.statusServerText.argbColor = 0xFF008800;
 	}
 	else {
-		mainForm.statusServerIcon.color = 0x999999;
+		mainForm.statusServerIcon.argbColor = 0xFF999999;
 		mainForm.statusServerText.text = '未连接';
-		mainForm.statusServerText.color = 0x999999;
+		mainForm.statusServerText.argbColor = 0xFF999999;
 	}
 	mainForm.statusServerIcon.redraw();
 	mainForm.statusServerText.redraw();
@@ -114,9 +113,22 @@ if(!cfg.used || cfg.used == "") {
 
 var defaultServerUrls = hwinfo.config.defaultUrls;
 
+var _checkRound = 0;  // 检测轮次：避免过期的 onFound 消息干扰本轮结果
+
 var notifier = thread.command(mainForm);
-notifier.onFound = function(url){
+notifier.onFound = function(args){
+	var url = args[["url"]];
+	var round = args[["round"]];
+
+	// 过期的检测结果直接丢弃
+	if(round !== _checkRound) return;
+
+	// 已经找到就不要再重复写配置
 	if(cfg.activeUrl && cfg.activeUrl != "") return;
+
+	// 通知调度线程停止后续批次
+	..thread.set("hwinfo_ping_found_" + round, true);
+
 	cfg.activeUrl = url;
 	var alreadyIn = false;
 	if(cfg.serverUrls && #cfg.serverUrls > 0) {
@@ -129,13 +141,17 @@ notifier.onFound = function(url){
 		..table.push(cfg.serverUrls, url);
 	}
 	hwinfo.config.save(cfg);
-	
+
 	var shortUrl = ..string.match(url, "\://([^/]+)") || url;
 	setServerStatus(true, shortUrl);
-	
-	setStatus('\uF058', '已连接' ++ shortUrl, 0x008800);
+	setStatus('\uF058', '已连接 ' ++ shortUrl, 0x008800);
 };
-notifier.onTimeout = function(){
+notifier.onTimeout = function(args){
+	var round = args ? args[["round"]] : 0;
+
+	// 只响应当前轮次的超时
+	if(round !== _checkRound) return;
+
 	if(!cfg.activeUrl || cfg.activeUrl == "") {
 		setServerStatus(false);
 		setStatus('\uF057', '服务器未连接', 0x999999);
@@ -144,7 +160,11 @@ notifier.onTimeout = function(){
 
 
 var checkServer = function(){
+	_checkRound++;  // 新一轮检测，丢弃旧轮次的迟到消息
+	var round = _checkRound;
 	setStatus('\uF110', '检测服务器...', 0xB8860B);
+
+	// 构造检测列表：自定义优先、默认追加，去重
 	var customUrls = cfg.serverUrls;
 	var urlList = {};
 	if(customUrls && #customUrls > 0) {
@@ -167,28 +187,64 @@ var checkServer = function(){
 		return;
 	}
 	cfg.activeUrl = "";
-	var hwnd = mainForm.hwnd;
-	for i = 1; #urlList {
-		..thread.invoke(
-			function(url, hwnd){
-				import hwinfo.upload;
-				import thread.command;
-				if(hwinfo.upload.ping(url, 3000)) {
-					thread.command.send(hwnd, "onFound", url);
-				}
-			}, urlList[i], hwnd
-		);
-	}
+
+	// 后台调度线程：分批并发探测，每批最多5个，批内并发，批间串行，命中即停
 	..thread.invoke(
-		function(hwnd){
+		function(urlList, hwnd, round){
+			import hwinfo.upload;
 			import thread.command;
-			sleep(4000);
-			thread.command.send(hwnd, "onTimeout");
-		}, hwnd
+			import thread;
+
+			var total = #urlList;
+			var foundKey = "hwinfo_ping_found_" + round;
+			var countKey = "hwinfo_ping_count_" + round;
+			thread.set(foundKey, false);
+
+			for(start = 1; total; 5) {
+				// 命中就不再起后续批次
+				if(thread.get(foundKey)) return;
+
+				var batchEnd = start + 4;
+				if(batchEnd > total) batchEnd = total;
+				var batchCount = batchEnd - start + 1;
+				thread.set(countKey, 0);
+
+				// 并发启动本批
+				for(i = start; batchEnd) {
+					thread.invoke(
+						function(url, hwnd, round, countKey){
+							import hwinfo.upload;
+							import thread.command;
+							import thread;
+							if(hwinfo.upload.ping(url, 3000)) {
+								thread.command.send(hwnd, "onFound", {url=url; round=round});
+							}
+							thread.set(countKey, thread.get(countKey) + 1);
+						}, urlList[i], hwnd, round, countKey
+					);
+				}
+
+				// 等待本批全部完成（最多4秒：3秒ping + 1秒余量）
+				var waited = 0;
+				while(waited < 4000) {
+					if(thread.get(countKey) >= batchCount) break;
+					if(thread.get(foundKey)) return;  // 命中了，不必等剩余
+					sleep(100);
+					waited += 100;
+				}
+			}
+		}, urlList, mainForm.hwnd, round
+	);
+
+	// 超时兜底（最多2批约6秒，8秒覆盖）
+	..thread.invoke(
+		function(hwnd, round){
+			import thread.command;
+			sleep(8000);
+			thread.command.send(hwnd, "onTimeout", {round=round});
+		}, mainForm.hwnd, round
 	);
 };
-
-
 
 var applySkin = function(){
 	mainForm.btnEditInfo.skin({

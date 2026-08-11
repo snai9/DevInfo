@@ -1,5 +1,4 @@
 import web.rest.jsonClient;
-import wsock.tcp.client;
 
 namespace hwinfo.upload;
 
@@ -82,32 +81,34 @@ send = function(data, serverUrl){
 	return resp;
 }
 
-// 探测服务器是否可达（先 TCP 测端口，再 HTTP GET 优先）
+// 探测服务器是否可达（直接用 WinINet HTTP，与 upload 走同一套系统路由，避免多网卡下原始 socket 选错出口）
 ping = function(serverUrl, timeoutMs){
 	if(!serverUrl || serverUrl == "") return false;
 	if(!timeoutMs) timeoutMs = 3000;
 
-	// 阶段1：TCP 端口检测
-	var host, port = ..string.match(serverUrl, "://([^\:]+)\:(\d+)");
-	if(!host) {
-		host = ..string.match(serverUrl, "://([^/]+)");
-		port = "80";
-	}
-	var tcpOk = ..wsock.tcp.client.test(host, ..tonumber(port), timeoutMs / 1000);
-	if(!tcpOk) return false;
-
-	// 阶段2：HTTP ping，GET 优先
 	var http = createClient("hwinfo-ping", timeoutMs, timeoutMs, timeoutMs);
+
+	// GET 优先（轻量）
+	var codeGet = null;
 	try {
 		http.get(serverUrl ++ "/api/ping");
+		codeGet = http.lastStatusCode;
 	} catch(ex) {
+		codeGet = http.lastStatusCode;
 	}
-	if(http.lastStatusCode >= 200 && http.lastStatusCode < 300) return true;
+	if(codeGet && codeGet >= 200 && codeGet < 300) return true;
+	if(http.ok()) return true;
 
 	// GET 不行再 fallback 到 POST
+	var codePost = null;
 	try {
 		http.post(serverUrl ++ "/api/ping", {});
+		codePost = http.lastStatusCode;
 	} catch(ex) {
+		codePost = http.lastStatusCode;
 	}
-	return http.lastStatusCode >= 200 && http.lastStatusCode < 300;
+	if(codePost && codePost >= 200 && codePost < 300) return true;
+	if(http.ok()) return true;
+
+	return false;
 }
