@@ -6,7 +6,7 @@ import hwinfo.collect;
 import hwinfo.upload;
 import hwinfo.namedlg;
 /*DSG{{*/
-var mainForm = win.form(text="当阳人社局资产信息采集系统     技术支持：信息中心 杨东    QQ:3190521314";right=599;bottom=689;bgcolor=0xE0F0F8;border="dialog frame";center=1)
+var mainForm = win.form(text="xxxxx资产信息采集系统     技术支持：信息中心snai    QQ:3939393939";right=599;bottom=689;bgcolor=0xE0F0F8;border="dialog frame";center=1)
 mainForm.add(
 btnEditInfo={cls="plus";text="修改信息";left=398;top=8;right=490;bottom=34;z=22};
 btnExit={cls="plus";text="退出";left=512;top=623;right=590;bottom=655;z=26};
